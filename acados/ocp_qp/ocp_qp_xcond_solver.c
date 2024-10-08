@@ -40,6 +40,7 @@
 #include "acados/utils/mem.h"
 #include "acados/utils/timing.h"
 #include "acados/utils/types.h"
+#include "acados/utils/strsep.h"
 
 
 
@@ -143,10 +144,28 @@ void ocp_qp_xcond_solver_dims_set_(void *config_, ocp_qp_xcond_solver_dims *dims
 void ocp_qp_xcond_solver_dims_get_(void *config_, ocp_qp_xcond_solver_dims *dims,
                                   int stage, const char *field, int* value)
 {
-    // get from orig_dims
-    ocp_qp_dims_get(config_, dims->orig_dims, stage, field, value);
+    char *ptr_module = NULL;
+    int module_length = 0;
+    char module[MAX_STR_LEN];
+    extract_module_name(field, module, &module_length, &ptr_module);
 
-    return;
+    // pass options to QP module
+    if ( ptr_module!=NULL && (!strcmp(ptr_module, "pcond")) )
+    {
+        ocp_qp_xcond_solver_config *config = config_;
+        ocp_qp_xcond_config *xcond = config->xcond;
+        void *xcond_qp_dims;
+        xcond->dims_get(xcond, dims->xcond_dims, "xcond_dims", &xcond_qp_dims);
+        ocp_qp_dims_get(config_, xcond_qp_dims, stage, &field[6], value);
+        return;
+    }
+    else
+    {
+        // get from orig_dims
+        ocp_qp_dims_get(config_, dims->orig_dims, stage, field, value);
+
+        return;
+    }
 }
 
 
@@ -253,22 +272,10 @@ void ocp_qp_xcond_solver_opts_set_(void *config_, void *opts_, const char *field
     qp_solver_config *qp_solver = config->qp_solver;
     ocp_qp_xcond_config *xcond = config->xcond;
 
-    int ii;
-
-    char module[MAX_STR_LEN];
     char *ptr_module = NULL;
     int module_length = 0;
-
-    // extract module name
-    char *char_ = strchr(field, '_');
-    if(char_!=NULL)
-    {
-        module_length = char_-field;
-        for(ii=0; ii<module_length; ii++)
-            module[ii] = field[ii];
-        module[module_length] = '\0'; // add end of string
-        ptr_module = module;
-    }
+    char module[MAX_STR_LEN];
+    extract_module_name(field, module, &module_length, &ptr_module);
 
     if( ptr_module!=NULL && (!strcmp(ptr_module, "cond")) ) // pass options to condensing module // TODO rename xcond ???
     {

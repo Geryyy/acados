@@ -434,9 +434,9 @@ cdef class AcadosOcpSolverCython:
         Get the last solution of the solver:
 
             :param stage: integer corresponding to shooting node
-            :param field: string in ['x', 'u', 'z', 'pi', 'lam', 't', 'sl', 'su',]
+            :param field: string in ['x', 'u', 'z', 'pi', 'lam', 'sl', 'su',]
 
-            .. note:: regarding lam, t: \n
+            .. note:: regarding lam: \n
                     the inequalities are internally organized in the following order: \n
                     [ lbu lbx lg lh lphi ubu ubx ug uh uphi; \n
                       lsbu lsbx lsg lsh lsphi usbu usbx usg ush usphi]
@@ -448,9 +448,10 @@ cdef class AcadosOcpSolverCython:
                       su: slack variables of soft upper inequality constraints \n
         """
 
-        out_fields = ['x', 'u', 'z', 'pi', 'lam', 't', 'sl', 'su']
+        out_fields = ['x', 'u', 'z', 'pi', 'lam', 'sl', 'su']
+        in_fields = ['p']
         sens_fields = ['sens_u', 'sens_x']
-        all_fields = out_fields + sens_fields
+        all_fields = out_fields + in_fields + sens_fields
 
         if field_ not in all_fields:
             raise Exception(f'AcadosOcpSolver.get(stage={stage}, field={field_}): \'{field_}\' is an invalid argument.\
@@ -478,6 +479,9 @@ cdef class AcadosOcpSolverCython:
         elif field_ in sens_fields:
             acados_solver_common.ocp_nlp_out_get(self.nlp_config, \
                 self.nlp_dims, self.sens_out, stage, field, <void *> out.data)
+        elif field_ in in_fields:
+            acados_solver_common.ocp_nlp_in_get(self.nlp_config, \
+                self.nlp_dims, self.nlp_in, stage, field, <void *> out.data)
 
         return out
 
@@ -527,7 +531,6 @@ cdef class AcadosOcpSolverCython:
             solution['u_'+i_string] = self.get(i,'u')
             solution['z_'+i_string] = self.get(i,'z')
             solution['lam_'+i_string] = self.get(i,'lam')
-            solution['t_'+i_string] = self.get(i, 't')
             solution['sl_'+i_string] = self.get(i, 'sl')
             solution['su_'+i_string] = self.get(i, 'su')
             if i < self.N:
@@ -710,14 +713,13 @@ cdef class AcadosOcpSolverCython:
 
     # Note: this function should not be used anymore, better use cost_set, constraints_set
     def set(self, int stage, str field_, value_):
-
         """
         Set numerical data inside the solver.
 
             :param stage: integer corresponding to shooting node
-            :param field: string in ['x', 'u', 'pi', 'lam', 't', 'p']
+            :param field: string in ['x', 'u', 'pi', 'lam', 'p']
 
-            .. note:: regarding lam, t: \n
+            .. note:: regarding lam: \n
                     the inequalities are internally organized in the following order: \n
                     [ lbu lbx lg lh lphi ubu ubx ug uh uphi; \n
                       lsbu lsbx lsg lsh lsphi usbu usbx usg ush usphi]
@@ -732,7 +734,7 @@ cdef class AcadosOcpSolverCython:
             raise Exception(f"set: value must be numpy array, got {type(value_)}.")
         cost_fields = ['y_ref', 'yref']
         constraints_fields = ['lbx', 'ubx', 'lbu', 'ubu']
-        out_fields = ['x', 'u', 'pi', 'lam', 't', 'z', 'sl', 'su']
+        out_fields = ['x', 'u', 'pi', 'lam', 'z', 'sl', 'su']
         mem_fields = ['xdot_guess', 'z_guess']
 
         field = field_.encode('utf-8')
@@ -874,7 +876,7 @@ cdef class AcadosOcpSolverCython:
         """
         Set options of the solver.
 
-            :param field: string, e.g. 'print_level', 'rti_phase', 'initialize_t_slacks', 'step_length', 'alpha_min', 'alpha_reduction', 'qp_warm_start', 'line_search_use_sufficient_descent', 'full_step_dual', 'globalization_use_SOC', 'qp_tol_stat', 'qp_tol_eq', 'qp_tol_ineq', 'qp_tol_comp', 'qp_tau_min', 'qp_mu0'
+            :param field: string, e.g. 'print_level', 'rti_phase', 'step_length', 'alpha_min', 'alpha_reduction', 'qp_warm_start', 'line_search_use_sufficient_descent', 'full_step_dual', 'globalization_use_SOC', 'qp_tol_stat', 'qp_tol_eq', 'qp_tol_ineq', 'qp_tol_comp', 'qp_tau_min', 'qp_mu0'
 
             :param value: of type int, float, string
 
@@ -886,7 +888,7 @@ cdef class AcadosOcpSolverCython:
             - qp_mu0: for HPIPM QP solvers: initial value for complementarity slackness
             - warm_start_first_qp: indicates if first QP in SQP is warm_started
         """
-        int_fields = ['print_level', 'rti_phase', 'initialize_t_slacks', 'qp_warm_start', 'line_search_use_sufficient_descent', 'full_step_dual', 'globalization_use_SOC', 'warm_start_first_qp']
+        int_fields = ['print_level', 'rti_phase', 'qp_warm_start', 'line_search_use_sufficient_descent', 'full_step_dual', 'globalization_use_SOC', 'warm_start_first_qp']
         double_fields = ['step_length', 'tol_eq', 'tol_stat', 'tol_ineq', 'tol_comp', 'alpha_min', 'alpha_reduction', 'eps_sufficient_descent',
         'qp_tol_stat', 'qp_tol_eq', 'qp_tol_ineq', 'qp_tol_comp', 'qp_tau_min', 'qp_mu0']
         string_fields = ['globalization']
@@ -907,7 +909,7 @@ cdef class AcadosOcpSolverCython:
                 if value_ < 0 or value_ > 2:
                     raise Exception('AcadosOcpSolverCython.solve(): argument \'rti_phase\' can '
                         'take only values 0, 1, 2 for SQP-RTI-type solvers')
-                if self.nlp_solver_type != 'SQP_RTI' and value_ > 0:
+                if self.nlp_solver_type != 'SQP_RTI':
                     raise Exception('AcadosOcpSolverCython.solve(): argument \'rti_phase\' can '
                         'take only value 0 for SQP-type solvers')
 

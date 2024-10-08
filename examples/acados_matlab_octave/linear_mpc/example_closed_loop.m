@@ -27,9 +27,16 @@
 % ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 % POSSIBILITY OF SUCH DAMAGE.;
 
-%
 
-%% test of native matlab interface
+
+% NOTE: `acados` currently supports both an old MATLAB/Octave interface (< v0.4.0)
+% as well as a new interface (>= v0.4.0).
+
+% THIS EXAMPLE still uses the OLD interface. If you are new to `acados` please start
+% with the examples that have been ported to the new interface already.
+% see https://github.com/acados/acados/issues/1196#issuecomment-2311822122)
+
+
 clear all; clc; close all;
 check_acados_requirements()
 
@@ -64,8 +71,8 @@ if strcmp(cost_type,'linear_ls')
     ocp_model.set('cost_W', model.W);
     ocp_model.set('cost_y_ref', model.y_ref);
 
-    ocp_model.set('cost_Vx_e', model.Vx_e);    
-    ocp_model.set('cost_W_e', model.W_e);    
+    ocp_model.set('cost_Vx_e', model.Vx_e);
+    ocp_model.set('cost_W_e', model.W_e);
     ocp_model.set('cost_y_ref_e', model.y_ref_e);
 else
     ocp_model.set('cost_expr_ext_cost_0', model.cost_expr_ext_cost_0);
@@ -96,7 +103,7 @@ ocp_opts.set('sim_method', 'discrete');
 ocp_opts.set('qp_solver','partial_condensing_hpipm');
 ocp_opts.set('parameter_values', zeros(model.nx,1));  % initialize to zero, change later
 
-ocp = acados_ocp(ocp_model, ocp_opts);
+ocp_solver = acados_ocp(ocp_model, ocp_opts);
 
 %% simulate the closed-loop system
 x0 = zeros(nx,1);  % initial state
@@ -109,32 +116,32 @@ solve_time_log = nan(1,nsim);  % for solver performance evaluation
 
 for i = 1 : nsim
     % set the current state
-    ocp.set('constr_x0', x0);
+    ocp_solver.set('constr_x0', x0);
 
     % set the reference
-    if strcmp(ocp.model_struct.cost_type,'linear_ls')
-        ocp.set('cost_y_ref', [zeros(nu,1); xr]);  % for the stage cost (y=[u;x])
-        ocp.set('cost_y_ref_e', xr);  % for the terminal cost (y=x)
+    if strcmp(ocp_solver.ocp.cost.cost_type,'LINEAR_LS')
+        ocp_solver.set('cost_y_ref', [zeros(nu,1); xr]);  % for the stage cost (y=[u;x])
+        ocp_solver.set('cost_y_ref_e', xr);  % for the terminal cost (y=x)
     else
-        ocp.set('p', xr);  % set as the parameter
+        ocp_solver.set('p', xr);  % set as the parameter
     end
-    
+
     % solve the ocp
-    ocp.solve();
+    ocp_solver.solve();
 
     % check the solver output
-    if ocp.get('status') ~= 0
+    if ocp_solver.get('status') ~= 0
         warning(['acados ocp solver failed with status ',num2str(status)]);
     end
 
     % apply the first control input to the plant, simulate one step
-    ctrl = ocp.get('u', 0);
+    ctrl = ocp_solver.get('u', 0);
     x0 = model.Ad*x0 + model.Bd*ctrl;
 
     % log the data
     X(:,i+1) = x0;
     U(:,i) = ctrl;
-    solve_time_log(i) = ocp.get('time_tot');
+    solve_time_log(i) = ocp_solver.get('time_tot');
 end
 
 disp([newline,'Average solve time: ',num2str(1e3*mean(solve_time_log)),' ms'])

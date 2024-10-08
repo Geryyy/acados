@@ -51,9 +51,7 @@ class AcadosModel():
     def __init__(self):
         ## common for OCP and Integrator
         self.name = None
-        """
-        The model name is used for code generation. Type: string. Default: :code:`None`
-        """
+        """The model name is used for code generation. Type: string. Default: :code:`None`"""
         self.x = None
         """CasADi variable describing the state of the system; Default: :code:`None`"""
         self.xdot = None
@@ -66,13 +64,22 @@ class AcadosModel():
         """CasADi variable describing parameters of the DAE; Default: :code:`[]`"""
         self.t = []
         """
-        CasADi variable representing time t in functions; Default: :code:`[]
+        CasADi variable representing time t in functions; Default: :code:`[]`
         NOTE:
         - For integrators, the start time has to be explicitly set via :py:attr:`acados_template.AcadosSimSolver.set`('t0').
         - For OCPs, the start time is set to 0. on each stage.
         The time dependency can be used within cost formulations and is relevant when cost integration is used.
         Start times of shooting intervals can be added using parameters.
-        `"""
+        """
+        self.p_global = None
+        """
+        CasADi variable containing global parameters.
+        This feature can be used to precompute expensive terms which only depend on these parameters, e.g. spline coefficients, when p_global are underlying data points.
+        Only supported for OCP solvers.
+        Updating these parameters can be done using :py:attr:`acados_template.acados_ocp_solver.AcadosOcpSolver.set_p_global_and_precompute_dependencies(values)`.
+        NOTE: this is only supported with CasADi beta release https://github.com/casadi/casadi/releases/tag/nightly-se
+        Default: :code:`None`
+        """
 
         ## dynamics
         self.f_impl_expr = None
@@ -97,20 +104,27 @@ class AcadosModel():
         self.dyn_ext_fun_type = 'casadi'
         """type of external functions for dynamics module; 'casadi' or 'generic'; Default: 'casadi'"""
         self.dyn_generic_source = None
-        """name of source file for discrete dynamics; Default: :code:`None`"""
+        """name of source file for discrete dynamics, only relevant if :code:`dyn_ext_fun_type` is :code:`'generic'`; Default: :code:`None`"""
         self.dyn_disc_fun_jac_hess = None
-        """name of function discrete dynamics + jacobian and hessian; Default: :code:`None`"""
+        """name of function discrete dynamics + jacobian and hessian, only relevant if :code:`dyn_ext_fun_type` is :code:`'generic'`; Default: :code:`None`"""
         self.dyn_disc_fun_jac = None
-        """name of function discrete dynamics + jacobian; Default: :code:`None`"""
+        """name of function discrete dynamics + jacobian, only relevant if :code:`dyn_ext_fun_type` is :code:`'generic'`; Default: :code:`None`"""
         self.dyn_disc_fun = None
-        """name of function discrete dynamics; Default: :code:`None`"""
+        """name of function discrete dynamics, only relevant if :code:`dyn_ext_fun_type` is :code:`'generic'`; Default: :code:`None`"""
+
+        self.dyn_impl_dae_fun_jac = None
+        """name of source files for implicit DAE function value and jacobian, only relevant if :code:`dyn_ext_fun_type` is :code:`'generic'`; Default: :code:`None`"""
+        self.dyn_impl_dae_jac = None
+        """name of source files for implicit DAE jacobian, only relevant if :code:`dyn_ext_fun_type` is :code:`'generic'`; Default: :code:`None`"""
+        self.dyn_impl_dae_fun = None
+        """name of source files for implicit DAE function value, only relevant if :code:`dyn_ext_fun_type` is :code:`'generic'`; Default: :code:`None`"""
 
         # for GNSF models
-        self.gnsf = {'nontrivial_f_LO': 1, 'purely_linear': 0}
-        """
-        dictionary containing information on GNSF structure needed when rendering templates.
-        Contains integers `nontrivial_f_LO`, `purely_linear`.
-        """
+        self.gnsf_nontrivial_f_LO = 1
+        """GNSF: Flag indicating whether GNSF stucture has nontrivial f."""
+        self.gnsf_purely_linear = 0
+        """GNSF: Flag indicating whether GNSF stucture is purely linear."""
+
 
         ### for OCP only.
         # NOTE: These could be moved to cost / constraints
@@ -175,27 +189,27 @@ class AcadosModel():
         ## CONVEX_OVER_NONLINEAR convex-over-nonlinear cost: psi(y(x, u, p) - y_ref; p)
         self.cost_psi_expr_0 = None
         """
-        CasADi expression for the outer loss function :math:`\psi(r, p)`, initial; Default: :code:`None`
+        CasADi expression for the outer loss function :math:`\psi(r - yref, t, p)`, initial; Default: :code:`None`
         Used if :py:attr:`acados_template.acados_ocp_options.AcadosOcpOptions.cost_type_0` is 'CONVEX_OVER_NONLINEAR'.
         """
         self.cost_psi_expr = None
         """
-        CasADi expression for the outer loss function :math:`\psi(r, p)`; Default: :code:`None`
+        CasADi expression for the outer loss function :math:`\psi(r - yref, t, p)`; Default: :code:`None`
         Used if :py:attr:`acados_template.acados_ocp_options.AcadosOcpOptions.cost_type` is 'CONVEX_OVER_NONLINEAR'.
         """
         self.cost_psi_expr_e = None
         """
-        CasADi expression for the outer loss function :math:`\psi(r, p)`, terminal; Default: :code:`None`
+        CasADi expression for the outer loss function :math:`\psi(r - yref, p)`, terminal; Default: :code:`None`
         Used if :py:attr:`acados_template.acados_ocp_options.AcadosOcpOptions.cost_type_e` is 'CONVEX_OVER_NONLINEAR'.
         """
         self.cost_r_in_psi_expr_0 = None
         """
-        CasADi symbolic input variable for the argument :math:`r` to the outer loss function :math:`\psi(r, p)`, initial; Default: :code:`None`
+        CasADi symbolic input variable for the argument :math:`r` to the outer loss function :math:`\psi(r, t, p)`, initial; Default: :code:`None`
         Used if :py:attr:`acados_template.acados_ocp_options.AcadosOcpOptions.cost_type_0` is 'CONVEX_OVER_NONLINEAR'.
         """
         self.cost_r_in_psi_expr = None
         """
-        CasADi symbolic input variable for the argument :math:`r` to the outer loss function :math:`\psi(r, p)`; Default: :code:`None`
+        CasADi symbolic input variable for the argument :math:`r` to the outer loss function :math:`\psi(r, t, p)`; Default: :code:`None`
         Used if :py:attr:`acados_template.acados_ocp_options.AcadosOcpOptions.cost_type` is 'CONVEX_OVER_NONLINEAR'.
         """
         self.cost_r_in_psi_expr_e = None
@@ -218,11 +232,11 @@ class AcadosModel():
         CasADi expression for the custom hessian of the outer loss function (only for convex-over-nonlinear cost), terminal; Default: :code:`None`
         Used if :py:attr:`acados_template.acados_ocp_options.AcadosOcpOptions.cost_type_e` is 'CONVEX_OVER_NONLINEAR'.
         """
-        self.nu_original = None
+        self.nu_original = None # TODO: remove? only used by benchmark
         """
         Number of original control inputs (before polynomial control augmentation); Default: :code:`None`
         """
-        self.t0 = None
+        self.t0 = None # TODO: remove? only used by benchmark
         """CasADi variable representing the start time of an interval; Default: :code:`None`"""
         self.__x_labels = None
         self.__u_labels = None
@@ -279,14 +293,10 @@ class AcadosModel():
         else:
             raise Exception(f"model.x must be casadi.SX or casadi.MX, got {type(self.x)}")
 
+
     def make_consistent(self, dims: Union[AcadosOcpDims, AcadosSimDims]) -> None:
 
         casadi_symbol = self.get_casadi_symbol()
-        if is_empty(self.p):
-            self.p = casadi_symbol('p', 0, 0)
-
-        if is_empty(self.z):
-            self.z = casadi_symbol('z', 0, 0)
 
         # nx
         if is_column(self.x):
@@ -301,17 +311,49 @@ class AcadosModel():
         else:
             dims.nu = casadi_length(self.u)
 
-        # nz
-        if is_empty(self.z):
-            dims.nz = 0
-        else:
-            dims.nz = casadi_length(self.z)
-
         # np
         if is_empty(self.p):
             dims.np = 0
+            self.p = casadi_symbol('p', 0, 0)
         else:
             dims.np = casadi_length(self.p)
+
+        # nz
+        if is_empty(self.z):
+            dims.nz = 0
+            self.z = casadi_symbol('z', 0, 0)
+        else:
+            dims.nz = casadi_length(self.z)
+
+        # sanity checks
+        for symbol, name in [(self.x, 'x'), (self.xdot, 'xdot'), (self.u, 'u'), (self.z, 'z'), (self.p, 'p'), (self.p_global, 'p_global')]:
+            if symbol is not None and not symbol.is_valid_input():
+                raise Exception(f"model.{name} must be valid CasADi symbol, got {symbol}")
+
+        # p_global
+        if self.p_global is not None:
+            if isinstance(dims, AcadosSimDims):
+                raise Exception("model.p_global is only supported for OCPs")
+            if any(ca.which_depends(self.p_global, self.p)):
+                raise Exception(f"model.p_global must not depend on model.p, got p_global ={self.p_global}, p = {self.p}")
+            if not isinstance(self.p_global, (ca.MX)):
+                # otherwise: AttributeError: 'SX' object has no attribute 'primitives'
+                raise Exception(f"model.p_global must be casadi.MX, got {type(self.p_global)}")
+            dims.np_global = casadi_length(self.p_global)
+
+        # model output dimension nx_next: dimension of the next state
+        if isinstance(dims, AcadosOcpDims):
+            if self.disc_dyn_expr is not None:
+                dims.nx_next = casadi_length(self.disc_dyn_expr)
+            else:
+                dims.nx_next = casadi_length(self.x)
+
+        if self.f_impl_expr is not None:
+            if casadi_length(self.f_impl_expr) != (dims.nx + dims.nz):
+                raise Exception(f"model.f_impl_expr must have length nx + nz = {dims.nx} + {dims.nz}, got {casadi_length(self.f_impl_expr)}")
+        if self.f_expl_expr is not None:
+            if casadi_length(self.f_expl_expr) != dims.nx:
+                raise Exception(f"model.f_expl_expr must have length nx = {dims.nx}, got {casadi_length(self.f_expl_expr)}")
 
         return
 
@@ -329,7 +371,8 @@ class AcadosModel():
 
     def augment_model_with_polynomial_control(self, degree: int) -> None:
         print("Deprecation warning: augment_model_with_polynomial_control() is deprecated and has been renamed to reformulate_with_polynomial_control().")
-        self.reformulate_with_polynomial_control()
+        self.reformulate_with_polynomial_control(degree=degree)
+
 
     def reformulate_with_polynomial_control(self, degree: int) -> None:
         """

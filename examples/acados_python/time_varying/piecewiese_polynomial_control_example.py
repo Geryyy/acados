@@ -111,7 +111,7 @@ def create_ocp_solver(cost_type, N_horizon, degree_u_polynom,
     ocp: AcadosOcp
     ocp, evaluate_polynomial_u_fun = create_ocp_formulation_without_opts(cost_type, degree_u_polynom, explicit_symmetric_penalties=explicit_symmetric_penalties, penalty_type=penalty_type)
 
-    ocp.dims.N = N_horizon
+    ocp.solver_options.N_horizon = N_horizon
 
     # set options
     ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM' # FULL_CONDENSING_QPOASES
@@ -122,6 +122,7 @@ def create_ocp_solver(cost_type, N_horizon, degree_u_polynom,
     # ocp.solver_options.print_level = 1
     ocp.solver_options.nlp_solver_type = 'SQP' # SQP_RTI, SQP
     ocp.solver_options.cost_discretization = 'INTEGRATOR'
+    ocp.solver_options.eval_residual_at_max_iter = False
 
     if nlp_solver_max_iter is not None:
         ocp.solver_options.nlp_solver_max_iter = nlp_solver_max_iter
@@ -161,6 +162,7 @@ def create_mocp_solver(cost_type, N_list, degrees_u_polynom, explicit_symmetric_
     # mocp.solver_options.print_level = 1
     mocp.solver_options.nlp_solver_type = 'SQP' # SQP_RTI, SQP
     mocp.solver_options.cost_discretization = 'INTEGRATOR'
+    mocp.solver_options.eval_residual_at_max_iter = False
     if nlp_solver_max_iter is not None:
         mocp.solver_options.nlp_solver_max_iter = nlp_solver_max_iter
 

@@ -30,7 +30,7 @@
 #
 
 import numpy as np
-from .utils import J_to_idx, print_J_to_idx_note, J_to_idx_slack, check_if_nparray_and_flatten
+from .utils import J_to_idx, print_J_to_idx_note, J_to_idx_slack, check_if_nparray_and_flatten, check_if_2d_nparray
 
 class AcadosOcpConstraints:
     """
@@ -64,25 +64,25 @@ class AcadosOcpConstraints:
         self.__D       = np.zeros((0,0))
         self.__C       = np.zeros((0,0))
         # polytopic constraints at shooting node N
-        self.__C_e     = np.zeros((0,0))
         self.__lg_e    = np.array([])
         self.__ug_e    = np.array([])
+        self.__C_e     = np.zeros((0,0))
+        # nonlinear constraints at initial shooting node
+        self.__lh_0    = np.array([])
+        self.__uh_0    = np.array([])
         # nonlinear constraints
         self.__lh      = np.array([])
         self.__uh      = np.array([])
-        # nonlinear constraints at initial shooting node
-        self.__uh_0    = np.array([])
-        self.__lh_0    = np.array([])
         # nonlinear constraints at shooting node N
-        self.__uh_e    = np.array([])
         self.__lh_e    = np.array([])
+        self.__uh_e    = np.array([])
         # convex-over-nonlinear constraints
+        self.__lphi_0 = np.array([])
+        self.__uphi_0 = np.array([])
         self.__lphi    = np.array([])
         self.__uphi    = np.array([])
-        self.__uphi_e = np.array([])
         self.__lphi_e = np.array([])
-        self.__uphi_0 = np.array([])
-        self.__lphi_0 = np.array([])
+        self.__uphi_e = np.array([])
         # SLACK BOUNDS
         # soft bounds on x
         self.__lsbx   = np.array([])
@@ -100,34 +100,34 @@ class AcadosOcpConstraints:
         self.__lsg    = np.array([])
         self.__usg    = np.array([])
         self.__idxsg  = np.array([])
-        # soft bounds on nonlinear constraints
-        self.__lsh    = np.array([])
-        self.__ush    = np.array([])
-        self.__idxsh  = np.array([])
-        # soft bounds on nonlinear constraints
-        self.__lsphi  = np.array([])
-        self.__usphi  = np.array([])
-        self.__idxsphi  = np.array([])
         # soft bounds on general linear constraints at shooting node N
         self.__lsg_e    = np.array([])
         self.__usg_e    = np.array([])
         self.__idxsg_e  = np.array([])
-        # soft bounds on nonlinear constraints at shooting node N
-        self.__lsh_e    = np.array([])
-        self.__ush_e    = np.array([])
-        self.__idxsh_e  = np.array([])
-        # soft bounds on nonlinear constraints at shooting node N
-        self.__lsphi_e    = np.array([])
-        self.__usphi_e    = np.array([])
-        self.__idxsphi_e  = np.array([])
         # soft bounds on nonlinear constraints at shooting node 0
         self.__lsh_0    = np.array([])
         self.__ush_0    = np.array([])
         self.__idxsh_0  = np.array([])
-        # soft bounds on nonlinear constraints at shooting node 0
+        # soft bounds on nonlinear constraints
+        self.__lsh    = np.array([])
+        self.__ush    = np.array([])
+        self.__idxsh  = np.array([])
+        # soft bounds on nonlinear constraints at shooting node N
+        self.__lsh_e    = np.array([])
+        self.__ush_e    = np.array([])
+        self.__idxsh_e  = np.array([])
+        # soft bounds on convex-over-nonlinear constraint (BGP) at shooting node 0
         self.__lsphi_0    = np.array([])
         self.__usphi_0    = np.array([])
         self.__idxsphi_0  = np.array([])
+        # soft bounds on convex-over-nonlinear constraint (BGP)
+        self.__lsphi  = np.array([])
+        self.__usphi  = np.array([])
+        self.__idxsphi  = np.array([])
+        # soft bounds on convex-over-nonlinear constraint (BGP) at shooting node N
+        self.__lsphi_e    = np.array([])
+        self.__usphi_e    = np.array([])
+        self.__idxsphi_e  = np.array([])
 
 
     # types
@@ -743,17 +743,28 @@ class AcadosOcpConstraints:
 
     @property
     def x0(self):
-        """:math:`x_0 \\in \mathbb{R}^{n_x}` - initial state --
-        Translated internally to :py:attr:`idxbx_0`, :py:attr:`lbx_0`, :py:attr:`ubx_0`, :py:attr:`idxbxe_0` """
-        print("x0 is converted to lbx_0, ubx_0, idxbx_0")
-        print("idxbx_0: ", self.__idxbx_0)
-        print("lbx_0: ", self.__lbx_0)
-        print("ubx_0: ", self.__ubx_0)
-        print("idxbxe_0: ", self.__idxbxe_0)
-        return None
+        """
+        :math:`x_0 \\in \mathbb{R}^{n_x}` - initial state --
+        Translated internally to :py:attr:`idxbx_0`, :py:attr:`lbx_0`, :py:attr:`ubx_0`, :py:attr:`idxbxe_0`
+        """
+        if self.has_x0:
+            return self.lbx_0
+        else:
+            print("x0 is not set. You can set it or specify lbx_0, ubx_0, idxbx_0, idxbxe_0 to implement general bounds on x0.")
+            print("")
+            print("idxbx_0: ", self.__idxbx_0)
+            print("lbx_0: ", self.__lbx_0)
+            print("ubx_0: ", self.__ubx_0)
+            print("idxbxe_0: ", self.__idxbxe_0)
+            return None
 
     @property
     def has_x0(self):
+        """
+        Internal variable to check if x0 is set.
+        Cannot be set from outside.
+        :bool: True if x0 is set, False otherwise.
+        """
         return self.__has_x0
 
     # SETTERS
@@ -787,24 +798,18 @@ class AcadosOcpConstraints:
     # initial x
     @lbx_0.setter
     def lbx_0(self, lbx_0):
-        if isinstance(lbx_0, np.ndarray):
-            self.__lbx_0 = lbx_0
-        else:
-            raise Exception('Invalid lbx_0 value.')
+        lbx_0 = check_if_nparray_and_flatten(lbx_0, "lbx_0")
+        self.__lbx_0 = lbx_0
 
     @ubx_0.setter
     def ubx_0(self, ubx_0):
-        if isinstance(ubx_0, np.ndarray):
-            self.__ubx_0 = ubx_0
-        else:
-            raise Exception('Invalid ubx_0 value.')
+        ubx_0 = check_if_nparray_and_flatten(ubx_0, "ubx_0")
+        self.__ubx_0 = ubx_0
 
     @idxbx_0.setter
     def idxbx_0(self, idxbx_0):
-        if isinstance(idxbx_0, np.ndarray):
-            self.__idxbx_0 = idxbx_0
-        else:
-            raise Exception('Invalid idxbx_0 value.')
+        idxbx_0 = check_if_nparray_and_flatten(idxbx_0, "idxbx_0")
+        self.__idxbx_0 = idxbx_0
 
     @Jbx_0.setter
     def Jbx_0(self, Jbx_0):
@@ -815,43 +820,33 @@ class AcadosOcpConstraints:
 
     @idxbxe_0.setter
     def idxbxe_0(self, idxbxe_0):
-        if isinstance(idxbxe_0, np.ndarray):
-            self.__idxbxe_0 = idxbxe_0
-        else:
-            raise Exception('Invalid idxbxe_0 value.')
+        idxbxe_0 = check_if_nparray_and_flatten(idxbxe_0, "idxbxe_0")
+        self.__idxbxe_0 = idxbxe_0
 
     @x0.setter
     def x0(self, x0):
-        if isinstance(x0, np.ndarray):
-            self.__lbx_0 = x0
-            self.__ubx_0 = x0
-            self.__idxbx_0 = np.arange(x0.size)
-            self.__idxbxe_0 = np.arange(x0.size)
-            self.__has_x0 = True
-        else:
-            raise Exception('Invalid x0 value.')
+        x0 = check_if_nparray_and_flatten(x0, "x0")
+        self.__lbx_0 = x0
+        self.__ubx_0 = x0
+        self.__idxbx_0 = np.arange(x0.size)
+        self.__idxbxe_0 = np.arange(x0.size)
+        self.__has_x0 = True
 
     # bounds on x
     @lbx.setter
     def lbx(self, lbx):
-        if isinstance(lbx, np.ndarray):
-            self.__lbx = lbx
-        else:
-            raise Exception('Invalid lbx value.')
+        lbx = check_if_nparray_and_flatten(lbx, "lbx")
+        self.__lbx = lbx
 
     @ubx.setter
     def ubx(self, ubx):
-        if isinstance(ubx, np.ndarray):
-            self.__ubx = ubx
-        else:
-            raise Exception('Invalid ubx value.')
+        ubx = check_if_nparray_and_flatten(ubx, "ubx")
+        self.__ubx = ubx
 
     @idxbx.setter
     def idxbx(self, idxbx):
-        if isinstance(idxbx, np.ndarray):
-            self.__idxbx = idxbx
-        else:
-            raise Exception('Invalid idxbx value.')
+        idxbx = check_if_nparray_and_flatten(idxbx, "idxbx")
+        self.__idxbx = idxbx
 
     @Jbx.setter
     def Jbx(self, Jbx):
@@ -863,24 +858,18 @@ class AcadosOcpConstraints:
     # bounds on u
     @lbu.setter
     def lbu(self, lbu):
-        if isinstance(lbu, np.ndarray):
-            self.__lbu = lbu
-        else:
-            raise Exception('Invalid lbu value.')
+        lbu = check_if_nparray_and_flatten(lbu, "lbu")
+        self.__lbu = lbu
 
     @ubu.setter
     def ubu(self, ubu):
-        if isinstance(ubu, np.ndarray):
-            self.__ubu = ubu
-        else:
-            raise Exception('Invalid ubu value.')
+        ubu = check_if_nparray_and_flatten(ubu, "ubu")
+        self.__ubu = ubu
 
     @idxbu.setter
     def idxbu(self, idxbu):
-        if isinstance(idxbu, np.ndarray):
-            self.__idxbu = idxbu
-        else:
-            raise Exception('Invalid idxbu value.')
+        idxbu = check_if_nparray_and_flatten(idxbu, "idxbu")
+        self.__idxbu = idxbu
 
     @Jbu.setter
     def Jbu(self, Jbu):
@@ -892,24 +881,18 @@ class AcadosOcpConstraints:
     # bounds on x at shooting node N
     @lbx_e.setter
     def lbx_e(self, lbx_e):
-        if isinstance(lbx_e, np.ndarray):
-            self.__lbx_e = lbx_e
-        else:
-            raise Exception('Invalid lbx_e value.')
+        lbx_e = check_if_nparray_and_flatten(lbx_e, "lbx_e")
+        self.__lbx_e = lbx_e
 
     @ubx_e.setter
     def ubx_e(self, ubx_e):
-        if isinstance(ubx_e, np.ndarray):
-            self.__ubx_e = ubx_e
-        else:
-            raise Exception('Invalid ubx_e value.')
+        ubx_e = check_if_nparray_and_flatten(ubx_e, "ubx_e")
+        self.__ubx_e = ubx_e
 
     @idxbx_e.setter
     def idxbx_e(self, idxbx_e):
-        if isinstance(idxbx_e, np.ndarray):
-            self.__idxbx_e = idxbx_e
-        else:
-            raise Exception('Invalid idxbx_e value.')
+        idxbx_e = check_if_nparray_and_flatten(idxbx_e, "idxbx_e")
+        self.__idxbx_e = idxbx_e
 
     @Jbx_e.setter
     def Jbx_e(self, Jbx_e):
@@ -921,28 +904,19 @@ class AcadosOcpConstraints:
     # polytopic constraints
     @D.setter
     def D(self, D):
-        if isinstance(D, np.ndarray) and len(D.shape) == 2:
-            self.__D = D
-        else:
-            raise Exception('Invalid constraint D value.' \
-                + 'Should be 2 dimensional numpy array.')
+        check_if_2d_nparray(D, "D")
+        self.__D = D
 
     @C.setter
     def C(self, C):
-        if isinstance(C, np.ndarray) and len(C.shape) == 2:
-            self.__C = C
-        else:
-            raise Exception('Invalid constraint C value.' \
-                + 'Should be 2 dimensional numpy array.')
+        check_if_2d_nparray(C, "C")
+        self.__C = C
 
     # polytopic constraints at shooting node N
     @C_e.setter
     def C_e(self, C_e):
-        if isinstance(C_e, np.ndarray) and len(C_e.shape) == 2:
-            self.__C_e = C_e
-        else:
-            raise Exception('Invalid constraint C_e value.' \
-                + 'Should be 2 dimensional numpy array.')
+        check_if_2d_nparray(C_e, "C_e")
+        self.__C_e = C_e
 
     @lg.setter
     def lg(self, value):
@@ -1040,10 +1014,8 @@ class AcadosOcpConstraints:
 
     @idxsbx.setter
     def idxsbx(self, idxsbx):
-        if isinstance(idxsbx, np.ndarray):
-            self.__idxsbx = idxsbx
-        else:
-            raise Exception('Invalid idxsbx value.')
+        idxsbx = check_if_nparray_and_flatten(idxsbx, "idxsbx")
+        self.__idxsbx = idxsbx
 
     @Jsbx.setter
     def Jsbx(self, Jsbx):
@@ -1065,10 +1037,8 @@ class AcadosOcpConstraints:
 
     @idxsbu.setter
     def idxsbu(self, idxsbu):
-        if isinstance(idxsbu, np.ndarray):
-            self.__idxsbu = idxsbu
-        else:
-            raise Exception('Invalid idxsbu value.')
+        idxsbu = check_if_nparray_and_flatten(idxsbu, "idxsbu")
+        self.__idxsbu = idxsbu
 
     @Jsbu.setter
     def Jsbu(self, Jsbu):
@@ -1090,10 +1060,8 @@ class AcadosOcpConstraints:
 
     @idxsbx_e.setter
     def idxsbx_e(self, idxsbx_e):
-        if isinstance(idxsbx_e, np.ndarray):
-            self.__idxsbx_e = idxsbx_e
-        else:
-            raise Exception('Invalid idxsbx_e value.')
+        idxsbx_e = check_if_nparray_and_flatten(idxsbx_e, "idxsbx_e")
+        self.__idxsbx_e = idxsbx_e
 
     @Jsbx_e.setter
     def Jsbx_e(self, Jsbx_e):
@@ -1101,7 +1069,6 @@ class AcadosOcpConstraints:
             self.__idxsbx_e = J_to_idx_slack(Jsbx_e)
         else:
             raise Exception('Invalid Jsbx_e value.')
-
 
     # soft bounds on general linear constraints
     @lsg.setter
@@ -1125,7 +1092,6 @@ class AcadosOcpConstraints:
             self.__idxsg = J_to_idx_slack(Jsg)
         else:
             raise Exception('Invalid Jsg value, expected numpy array.')
-
 
     # soft bounds on nonlinear constraints
     @lsh.setter

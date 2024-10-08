@@ -29,7 +29,6 @@
 # POSSIBILITY OF SUCH DAMAGE.;
 #
 
-from typing import Optional
 
 class AcadosSimDims:
     """
@@ -102,10 +101,11 @@ class AcadosOcpDims:
         self.__nu = None
         self.__nz = 0
         self.__np = 0
+        self.__nx_next = None
         # cost
         self.__ny = 0
-        self.__ny_e = 0
         self.__ny_0 = 0
+        self.__ny_e = 0
         # bounds
         self.__nbu = 0
         self.__nbx = 0
@@ -129,18 +129,19 @@ class AcadosOcpDims:
         self.__nsbx_e = 0
         self.__nsbu = 0
         self.__nsh = 0
-        self.__nsh_e = 0
         self.__nsh_0 = 0
+        self.__nsh_e = 0
         self.__nsphi = 0
-        self.__nsphi_e = 0
         self.__nsphi_0 = 0
-        self.__ns_0 = 0
+        self.__nsphi_e = 0
         self.__ns = 0
+        self.__ns_0 = 0
         self.__ns_e = 0
         self.__nsg = 0
         self.__nsg_e = 0
         # equalities within x bounds
         self.__nbxe_0 = None
+        self.__np_global = 0
 
 
     @property
@@ -166,6 +167,12 @@ class AcadosOcpDims:
         """:math:`n_p` - number of parameters.
         Type: int; default: 0"""
         return self.__np
+
+    @property
+    def nx_next(self):
+        """:math:`n_{x, \\text{next}}` - state dimension of next state.
+        Type: int; default: None"""
+        return self.__nx_next
 
     @property
     def ny(self):
@@ -366,8 +373,16 @@ class AcadosOcpDims:
         return self.__ng_e
 
     @property
+    def np_global(self):
+        """number of global parameters p_global; default: 0"""
+        return self.__np_global
+
+    @property
     def N(self):
-        """:math:`N` - prediction horizon.
+        """
+        :math:`N` - Number of shooting intervals.
+        DEPRECATED: use ocp.solver_options.N instead.
+
         Type: int; default: None"""
         return self.__N
 
@@ -398,6 +413,20 @@ class AcadosOcpDims:
             self.__np = np
         else:
             raise Exception('Invalid np value, expected nonnegative integer.')
+
+    @nx_next.setter
+    def nx_next(self, nx_next):
+        if isinstance(nx_next, int) and nx_next > 0:
+            self.__nx_next = nx_next
+        else:
+            raise Exception('Invalid nx_next value, expected positive integer.')
+
+    @np_global.setter
+    def np_global(self, np_global):
+        if isinstance(np_global, int) and np_global > -1:
+            self.__np_global = np_global
+        else:
+            raise Exception('Invalid np_global value, expected nonnegative integer.')
 
     @ny_0.setter
     def ny_0(self, ny_0):

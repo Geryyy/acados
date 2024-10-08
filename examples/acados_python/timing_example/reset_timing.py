@@ -56,7 +56,7 @@ def main(cost_type='NONLINEAR_LS', hessian_approximation='EXACT', ext_cost_use_n
     ny_e = nx
     N = 20
 
-    ocp.dims.N = N
+    ocp.solver_options.N_horizon = N
 
     # set cost
     Q = 2*np.diag([1e3, 1e3, 1e-2, 1e-2])
@@ -140,7 +140,7 @@ def main(cost_type='NONLINEAR_LS', hessian_approximation='EXACT', ext_cost_use_n
         t0 = time.time()
         # ocp_solver = AcadosOcpSolver(ocp, json_file = 'acados_ocp.json', build=False, generate=False)
         from c_generated_code.acados_ocp_solver_pyx import AcadosOcpSolverCython
-        ocp_solver = AcadosOcpSolverCython(ocp.model.name, ocp.solver_options.nlp_solver_type, ocp.dims.N)
+        ocp_solver = AcadosOcpSolverCython(ocp.model.name, ocp.solver_options.nlp_solver_type, ocp.solver_options.N_horizon)
         create_time.append( time.time() - t0)
     print(f"create_time: min {np.min(create_time)*1e3:.4f} ms mean {np.mean(create_time)*1e3:.4f} ms max {np.max(create_time)*1e3:.4f} ms over {Ncreate} executions")
     # create_time: min 0.2189 ms mean 0.2586 ms max 0.6881 ms over 10000 executions
@@ -152,8 +152,8 @@ def main(cost_type='NONLINEAR_LS', hessian_approximation='EXACT', ext_cost_use_n
         # set NaNs as input to test reset() -> NOT RECOMMENDED!!!
         # ocp_solver.options_set('print_level', 2)
         for i in range(N):
-            ocp_solver.set(i, 'x', np.NaN * np.ones((nx,)))
-            ocp_solver.set(i, 'u', np.NaN * np.ones((nu,)))
+            ocp_solver.set(i, 'x', np.nan * np.ones((nx,)))
+            ocp_solver.set(i, 'u', np.nan * np.ones((nu,)))
         status = ocp_solver.solve()
         ocp_solver.print_statistics() # encapsulates: stat = ocp_solver.get_stats("statistics")
         if status == 0:

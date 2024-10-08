@@ -56,8 +56,7 @@ extern "C" {
 
 #define MAX_STR_LEN 256
 #define ACADOS_EPS 1e-12
-#define ACADOS_NEG_INFTY -1.0e9
-#define ACADOS_POS_INFTY +1.0e9
+#define ACADOS_INFTY 1e10
 #define UNUSED(x) ((void)(x))
 
 
@@ -80,6 +79,7 @@ enum return_values
     ACADOS_MINSTEP,
     ACADOS_QP_FAILURE,
     ACADOS_READY,
+    ACADOS_UNBOUNDED,
 };
 
 

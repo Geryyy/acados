@@ -32,11 +32,15 @@
 import sys, json, os
 sys.path.insert(0, '../common')
 
-from acados_template import AcadosOcp, AcadosOcpSolver, acados_dae_model_json_dump, get_acados_path
+from acados_template import AcadosOcp, AcadosOcpSolver, acados_dae_model_json_dump, get_acados_path, get_simulink_default_opts
 from pendulum_model import export_pendulum_ode_model
 import numpy as np
 import scipy.linalg
 from utils import plot_pendulum
+
+import matplotlib.pyplot as plt
+
+import casadi as ca
 
 TOL = 1e-7
 
@@ -67,7 +71,7 @@ def main(discretization='shooting_nodes'):
     N = 15
 
     # discretization
-    ocp.dims.N = N
+    ocp.solver_options.N_horizon = N
     # shooting_nodes = np.linspace(0, Tf, N+1)
 
     time_steps = np.linspace(0, 1, N+1)[1:]
@@ -125,33 +129,34 @@ def main(discretization='shooting_nodes'):
     ocp.constraints.idxbu = np.array([0])
 
     ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM' # FULL_CONDENSING_QPOASES
-    ocp.solver_options.hpipm_mode = 'ROBUST'
+    # partial condensing settings
+    qp_solver_cond_N = 8
+    ocp.solver_options.qp_solver_cond_N = qp_solver_cond_N
+    ocp.solver_options.qp_solver_cond_block_size = (qp_solver_cond_N) * [1] + [N-((qp_solver_cond_N))]
+    # HPIPM settings
+    ocp.solver_options.qp_solver_mu0 = 1e3
+
     ocp.solver_options.hessian_approx = 'GAUSS_NEWTON'
     ocp.solver_options.integrator_type = integrator_type
     ocp.solver_options.print_level = 0
     ocp.solver_options.nlp_solver_type = 'SQP' # SQP_RTI, SQP
     ocp.solver_options.nlp_solver_ext_qp_res = 1
+    ocp.solver_options.hpipm_mode = "ROBUST"
+
+    ocp.solver_options.globalization = 'FIXED_STEP'
 
     # set prediction horizon
     ocp.solver_options.tf = Tf
-    ocp.solver_options.initialize_t_slacks = 1
 
     # Set additional options for Simulink interface:
-    acados_path = get_acados_path()
-    json_path = os.path.join(acados_path, 'interfaces/acados_template/acados_template')
-    with open(json_path + '/simulink_default_opts.json', 'r') as f:
-        simulink_opts = json.load(f)
+    simulink_opts = get_simulink_default_opts()
     ocp_solver = AcadosOcpSolver(ocp, json_file = 'acados_ocp.json', simulink_opts = simulink_opts, verbose=False)
-
-    # ocp_solver = AcadosOcpSolver(ocp, json_file = 'acados_ocp.json')
-
 
     simX = np.zeros((N+1, nx))
     simU = np.zeros((N, nu))
 
     # change options after creating ocp_solver
-    ocp_solver.options_set("step_length", 0.99999)
-    ocp_solver.options_set("globalization", "fixed_step") # fixed_step, merit_backtracking
+    ocp_solver.options_set("globalization_fixed_step_length", 0.99999)
     ocp_solver.options_set("tol_eq", TOL)
     ocp_solver.options_set("tol_stat", TOL)
     ocp_solver.options_set("tol_ineq", TOL)
@@ -162,27 +167,50 @@ def main(discretization='shooting_nodes'):
         ocp_solver.set(i, "x", x0)
     status = ocp_solver.solve()
 
-    if status not in [0, 2]:
-        ocp_solver.store_iterate()
-        ocp_solver.dump_last_qp_to_json()
-        raise Exception(f'acados returned status {status}.')
-
     # get primal solution
     for i in range(N):
         simX[i,:] = ocp_solver.get(i, "x")
         simU[i,:] = ocp_solver.get(i, "u")
     simX[N,:] = ocp_solver.get(N, "x")
 
+    # get condensed Hessian
+    pcond_H = []
+    pcond_Q = []
+    pcond_R = []
+    pcond_S = []
+    for i in range(ocp.solver_options.qp_solver_cond_N+1):
+        pcond_Q.append(ocp_solver.get_from_qp_in(i, "pcond_Q"))
+        pcond_R.append(ocp_solver.get_from_qp_in(i, "pcond_R"))
+        pcond_S.append(ocp_solver.get_from_qp_in(i, "pcond_S"))
+
+        pcond_RSQ = ca.blockcat(pcond_Q[-1], pcond_S[-1].T, pcond_S[-1], pcond_R[-1]).full()
+        # copy lower triangular part to upper triangular part
+        pcond_RSQ = np.tril(pcond_RSQ) + np.tril(pcond_RSQ, -1).T
+        pcond_H.append(pcond_RSQ)
+        eig_values, _ = np.linalg.eig(pcond_RSQ)
+        print(f"eigen values of partially condenesed Hessian block {i}: {eig_values}")
+
+    # pcond_H = ocp_solver.get_from_qp_in(ocp.solver_options.qp_solver_cond_N, "pcond_H")
+    # print("pcond_H", pcond_H)
+    # pcond_H_mat = scipy.linalg.block_diag(*pcond_H)
+    # plt.spy(pcond_H_mat)
+    # plt.show()
+
+    # check dimensions of partially condensed matrices
+    assert pcond_Q[0].shape == (0, 0)
+    for i in range(1, ocp.solver_options.qp_solver_cond_N+1):
+        assert pcond_Q[i].shape == (nx, nx)
+    for i in range(ocp.solver_options.qp_solver_cond_N+1):
+        block_size = ocp.solver_options.qp_solver_cond_block_size[i]
+        assert pcond_R[i].shape == (nu*block_size, nu*block_size)
+
     print("inequality multipliers at stage 1")
     print(ocp_solver.get(1, "lam")) # inequality multipliers at stage 1
-    print("slack values at stage 1")
-    print(ocp_solver.get(1, "t")) # slack values at stage 1
     print("multipliers of dynamic conditions between stage 1 and 2")
     print(ocp_solver.get(1, "pi")) # multipliers of dynamic conditions between stage 1 and 2
 
-    # initialize ineq multipliers and slacks at stage 1
+    # initialize ineq multipliers at stage 1
     ocp_solver.set(1, "lam", np.zeros(2,))
-    ocp_solver.set(1, "t", np.zeros(2,))
 
     ocp_solver.print_statistics() # encapsulates: stat = ocp_solver.get_stats("statistics")
 
@@ -197,6 +225,12 @@ def main(discretization='shooting_nodes'):
     # print("simX", simX)
     iterate_filename = f'final_iterate_{discretization}.json'
     ocp_solver.store_iterate(filename=iterate_filename, overwrite=True)
+
+    if status not in [0, 2]:
+        ocp_solver.store_iterate()
+        ocp_solver.dump_last_qp_to_json()
+        ocp_solver.print_statistics()
+        raise Exception(f'acados returned status {status}.')
 
     plot_pendulum(shooting_nodes, Fmax, simU, simX, latexify=False)
     del ocp_solver

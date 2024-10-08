@@ -31,6 +31,7 @@
 from acados_template import AcadosOcp, AcadosOcpSolver
 from pendulum_model import export_pendulum_ode_model
 import numpy as np
+import casadi as ca
 from utils import plot_pendulum
 
 def main():
@@ -46,22 +47,25 @@ def main():
     nu = model.u.rows()
     N = 20
 
-    # set number of shooting intervals
-    ocp.dims.N = N
-
     # set prediction horizon
+    ocp.solver_options.N_horizon = N
     ocp.solver_options.tf = Tf
 
-    # set cost
+    # cost matrices
     Q_mat = 2*np.diag([1e3, 1e3, 1e-2, 1e-2])
     R_mat = 2*np.diag([1e-2])
 
-    # the 'EXTERNAL' cost type can be used to define general cost terms
-    # NOTE: This leads to additional (exact) hessian contributions when using GAUSS_NEWTON hessian.
-    ocp.cost.cost_type = 'EXTERNAL'
-    ocp.cost.cost_type_e = 'EXTERNAL'
-    ocp.model.cost_expr_ext_cost = model.x.T @ Q_mat @ model.x + model.u.T @ R_mat @ model.u
-    ocp.model.cost_expr_ext_cost_e = model.x.T @ Q_mat @ model.x
+    # path cost
+    ocp.cost.cost_type = 'NONLINEAR_LS'
+    ocp.model.cost_y_expr = ca.vertcat(model.x, model.u)
+    ocp.cost.yref = np.zeros((nx+nu,))
+    ocp.cost.W = ca.diagcat(Q_mat, R_mat).full()
+
+    # terminal cost
+    ocp.cost.cost_type_e = 'NONLINEAR_LS'
+    ocp.cost.yref_e = np.zeros((nx,))
+    ocp.model.cost_y_expr_e = model.x
+    ocp.cost.W_e = Q_mat
 
     # set constraints
     Fmax = 80
@@ -81,7 +85,7 @@ def main():
     ocp.solver_options.nlp_solver_type = 'SQP' # SQP_RTI, SQP
     ocp.solver_options.globalization = 'MERIT_BACKTRACKING' # turns on globalization
 
-    ocp_solver = AcadosOcpSolver(ocp, json_file = 'acados_ocp.json')
+    ocp_solver = AcadosOcpSolver(ocp)
 
     simX = np.zeros((N+1, nx))
     simU = np.zeros((N, nu))

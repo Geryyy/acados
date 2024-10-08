@@ -13,7 +13,7 @@ If you are using `acados` in your scientific work, please cite the original jour
 We highly appreciate if you share your `acados` success stories with the world, and mention them on the [List of projects that feature `acados`](../list_of_projects/index.md).
 Please submit a PR, make a forum post, or contact the developers if you want to showcase your project there!
 
-## Publications on advanced `acados` features:
+## Publications on advanced `acados` features
 If you are using some of the following advanced features of `acados`, please additionally cite the corresponding publications.
 
 ### Fast integrators with sensitivity propagation for use in CasADi
@@ -26,6 +26,25 @@ Additionally it describes the [`casados-integrator`](https://github.com/FreyJo/c
   Author                   = {Frey, Jonathan and De Schutter, Jochem and Diehl, Moritz},
   Booktitle                = ECC,
   Year                     = {2023},
+}
+```
+
+### Multi-Phase Optimal Control Problems for Efficient Nonlinear Model Predictive Control with acados
+Computationally efficient nonlinear model predictive control relies on elaborate discrete-time optimal control problem (OCP) formulations trading off accuracy with respect to the continuous-time problem and associated computational burden. Such formulations, however, are in general not easy to implement within specialized software frameworks tailored to numerical optimal control. This paper introduces a new multi-phase OCP interface for the open-source software acados allowing to conveniently formulate such problems and generate fast solvers that can be used for nonlinear model predictive control (NMPC). While multi-phase OCP (MOCP) formulations occur naturally in many applications, this paper focuses on MOCP formulations that can be used to efficiently approximate standard continuous-time OCPs in the context of NMPC.
+
+
+This feature can be used via the `AcadosMultiphaseOcp` class.
+
+
+```latex
+@misc{Frey2024MultiPhase,
+      title={Multi-Phase Optimal Control Problems for Efficient Nonlinear Model Predictive Control with acados},
+      author={Jonathan Frey and Katrin Baumgärtner and Gianluca Frison and Moritz Diehl},
+      year={2024},
+      eprint={2408.07382},
+      archivePrefix={arXiv},
+      primaryClass={math.OC},
+      url={https://arxiv.org/abs/2408.07382},
 }
 ```
 

@@ -94,6 +94,13 @@ typedef enum
     INVALID_REGULARIZE,
 } ocp_nlp_reg_t;
 
+/// Globalization types
+typedef enum
+{
+    FIXED_STEP,
+    MERIT_BACKTRACKING,
+    FUNNEL_L1PEN_LINESEARCH
+} ocp_nlp_globalization_t;
 
 /// Structure to store the configuration of a non-linear program
 typedef struct ocp_nlp_plan_t
@@ -109,6 +116,9 @@ typedef struct ocp_nlp_plan_t
 
     /// Regularization type, defaults to no regularization.
     ocp_nlp_reg_t regularization;
+
+    /// Globalization type, defaults to fixed step.
+    ocp_nlp_globalization_t globalization;
 
     /// Cost type for each stage.
     ocp_nlp_cost_t *nlp_cost;
@@ -193,9 +203,25 @@ ACADOS_SYMBOL_EXPORT void ocp_nlp_in_destroy(void *in);
 ACADOS_SYMBOL_EXPORT void ocp_nlp_in_set(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_in *in, int stage,
         const char *field, void *value);
 
+
+ACADOS_SYMBOL_EXPORT int ocp_nlp_dynamics_model_set_external_param_fun(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_in *in,
+        int stage, const char *field, void *ext_fun);
+
+
+ACADOS_SYMBOL_EXPORT int ocp_nlp_cost_model_set_external_param_fun(ocp_nlp_config *config, ocp_nlp_dims *dims,
+        ocp_nlp_in *in, int stage, const char *field, void *ext_fun);
+
+
+ACADOS_SYMBOL_EXPORT int ocp_nlp_constraints_model_set_external_param_fun(ocp_nlp_config *config, ocp_nlp_dims *dims,
+        ocp_nlp_in *in, int stage, const char *field, void *ext_fun);
+
+
+ACADOS_SYMBOL_EXPORT void ocp_nlp_in_set_params_sparse(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_in *in, int stage,
+        int *idx, double *p, int n_update);
+
 ///
-// void ocp_nlp_in_get(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_in *in, int stage,
-//         const char *field, void *value);
+ACADOS_SYMBOL_EXPORT void ocp_nlp_in_get(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_in *in, int stage,
+        const char *field, void *value);
 
 /// Sets the function pointers to the dynamics functions for the given stage.
 ///
@@ -278,6 +304,9 @@ ACADOS_SYMBOL_EXPORT void ocp_nlp_out_get(ocp_nlp_config *config, ocp_nlp_dims *
 //
 ACADOS_SYMBOL_EXPORT void ocp_nlp_get_at_stage(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_solver *solver,
         int stage, const char *field, void *value);
+
+ACADOS_SYMBOL_EXPORT void ocp_nlp_get_from_iterate(ocp_nlp_dims *dims, ocp_nlp_solver *solver,
+        int iter, int stage, const char *field, void *value);
 
 // TODO(andrea): remove this once/if the MATLAB interface uses the new setters below?
 ACADOS_SYMBOL_EXPORT int ocp_nlp_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *out,

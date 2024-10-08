@@ -30,25 +30,32 @@
 #
 
 import numpy as np
+from .utils import check_if_nparray_and_flatten
 
 
 INTEGRATOR_TYPES = ('ERK', 'IRK', 'GNSF', 'DISCRETE', 'LIFTED_IRK')
 COLLOCATION_TYPES = ('GAUSS_RADAU_IIA', 'GAUSS_LEGENDRE', 'EXPLICIT_RUNGE_KUTTA')
 COST_DISCRETIZATION_TYPES = ('EULER', 'INTEGRATOR')
 
-
 class AcadosOcpOptions:
     """
     class containing the description of the solver options
     """
     def __init__(self):
-        self.__qp_solver = 'PARTIAL_CONDENSING_HPIPM'
         self.__hessian_approx = 'GAUSS_NEWTON'
         self.__integrator_type = 'ERK'
         self.__tf = None
+        self.__N_horizon = None
         self.__nlp_solver_type = 'SQP_RTI'
+        self.__nlp_solver_tol_stat = 1e-6
+        self.__nlp_solver_tol_eq = 1e-6
+        self.__nlp_solver_tol_ineq = 1e-6
+        self.__nlp_solver_tol_comp = 1e-6
+        self.__nlp_solver_max_iter = 100
+        self.__nlp_solver_ext_qp_res = 0
+        self.__nlp_solver_warm_start_first_qp = False
+        self.__nlp_solver_tol_min_step_norm = None
         self.__globalization = 'FIXED_STEP'
-        self.__nlp_solver_step_length = 1.0
         self.__levenberg_marquardt = 0.0
         self.__collocation_type = 'GAUSS_LEGENDRE'
         self.__sim_method_num_stages = 4
@@ -56,45 +63,56 @@ class AcadosOcpOptions:
         self.__sim_method_newton_iter = 3
         self.__sim_method_newton_tol = 0.0
         self.__sim_method_jac_reuse = 0
+        self.__time_steps = None
+        self.__Tsim = None
+        self.__qp_solver = 'PARTIAL_CONDENSING_HPIPM'
         self.__qp_solver_tol_stat = None
         self.__qp_solver_tol_eq = None
         self.__qp_solver_tol_ineq = None
         self.__qp_solver_tol_comp = None
         self.__qp_solver_iter_max = 50
         self.__qp_solver_cond_N = None
+        self.__qp_solver_cond_block_size = None
         self.__qp_solver_warm_start = 0
         self.__qp_solver_cond_ric_alg = 1
         self.__qp_solver_ric_alg = 1
-        self.__nlp_solver_tol_stat = 1e-6
-        self.__nlp_solver_tol_eq = 1e-6
-        self.__nlp_solver_tol_ineq = 1e-6
-        self.__nlp_solver_tol_comp = 1e-6
-        self.__nlp_solver_max_iter = 100
-        self.__nlp_solver_ext_qp_res = 0
+        self.__qp_solver_mu0 = 0.0
         self.__rti_log_residuals = 0
-        self.__Tsim = None
         self.__print_level = 0
-        self.__initialize_t_slacks = 0
         self.__cost_discretization = 'EULER'
         self.__regularize_method = 'NO_REGULARIZE'
         self.__reg_epsilon = 1e-4
-        self.__time_steps = None
         self.__shooting_nodes = None
         self.__exact_hess_cost = 1
         self.__exact_hess_dyn = 1
         self.__exact_hess_constr = 1
+        self.__eval_residual_at_max_iter = None
         self.__fixed_hess = 0
+        self.__globalization_funnel_init_increase_factor = 15.0
+        self.__globalization_funnel_init_upper_bound = 1.0
+        self.__globalization_funnel_sufficient_decrease_factor = 0.9
+        self.__globalization_funnel_kappa = 0.9
+        self.__globalization_funnel_fraction_switching_condition = 1e-3
+        self.__globalization_funnel_initial_penalty_parameter = 1.0
+        self.__globalization_fixed_step_length = 1.0
         self.__ext_cost_num_hess = 0
-        self.__alpha_min = 0.05
-        self.__alpha_reduction = 0.7
-        self.__line_search_use_sufficient_descent = 0
         self.__globalization_use_SOC = 0
-        self.__full_step_dual = 0
-        self.__eps_sufficient_descent = 1e-4
+        self.__globalization_alpha_min = None
+        self.__globalization_alpha_reduction = None
+        self.__globalization_line_search_use_sufficient_descent = 0
+        self.__globalization_full_step_dual = None
+        self.__globalization_eps_sufficient_descent = None
         self.__hpipm_mode = 'BALANCE'
         self.__with_solution_sens_wrt_params = False
         self.__with_value_sens_wrt_params = False
-        self.__num_threads_in_batch_solve: int = 1
+        self.__as_rti_iter = 1
+        self.__as_rti_level = 4
+        self.__with_adaptive_levenberg_marquardt = False
+        self.__adaptive_levenberg_marquardt_lam = 5.0
+        self.__adaptive_levenberg_marquardt_mu_min = 1e-16
+        self.__adaptive_levenberg_marquardt_mu0 = 1e-3
+        self.__log_primal_step_norm: bool = False
+        self.__store_iterates: bool = False
         # TODO: move those out? they are more about generation than about the acados OCP solver.
         self.__ext_fun_compile_flags = '-O2'
         self.__model_external_shared_lib_dir = None
@@ -103,13 +121,7 @@ class AcadosOcpOptions:
         self.__custom_update_header_filename = ''
         self.__custom_templates = []
         self.__custom_update_copy = True
-        self.__as_rti_iter = 1
-        self.__as_rti_level = 4
-        self.__with_adaptive_levenberg_marquardt = False
-        self.__adaptive_levenberg_marquardt_lam = 5.0
-        self.__adaptive_levenberg_marquardt_mu_min = 1e-16
-        self.__adaptive_levenberg_marquardt_mu0 = 1e-3
-        self.__log_primal_step_norm : bool = False
+        self.__num_threads_in_batch_solve: int = 1
 
     @property
     def qp_solver(self):
@@ -131,11 +143,12 @@ class AcadosOcpOptions:
     @property
     def custom_update_filename(self):
         """
-        Filename of the custom C function to update solver data and parameters in between solver calls
+        Filename of the custom C function to update solver data and parameters in between solver calls.
+        Compare also `AcadosOcpOptions.custom_update_header_filename`.
 
         This file has to implement the functions
         int custom_update_init_function([model.name]_solver_capsule* capsule);
-        int custom_update_function([model.name]_solver_capsule* capsule);
+        int custom_update_function([model.name]_solver_capsule* capsule, double* data, int data_len);
         int custom_update_terminate_function([model.name]_solver_capsule* capsule);
 
 
@@ -160,7 +173,7 @@ class AcadosOcpOptions:
     @property
     def custom_update_header_filename(self):
         """
-        Header filename of the custom C function to update solver data and parameters in between solver calls
+        Header filename of the custom C function to update solver data and parameters in between solver calls.
 
         This file has to declare the custom_update functions and look as follows:
 
@@ -236,10 +249,14 @@ class AcadosOcpOptions:
     @property
     def globalization(self):
         """Globalization type.
-        String in ('FIXED_STEP', 'MERIT_BACKTRACKING').
+        String in ('FIXED_STEP', 'MERIT_BACKTRACKING', 'FUNNEL_L1PEN_LINESEARCH').
         Default: 'FIXED_STEP'.
 
-        .. note:: preliminary implementation.
+        - FIXED_STEP: performs steps with a given step length, see option globalization_fixed_step_length
+        - MERIT_BACKTRACKING: performs a merit function based backtracking line search following Following Leineweber1999, Section "3.5.1 Line Search Globalization"
+        - FUNNEL_L1PEN_LINESEARCH: following "A Unified Funnel Restoration SQP Algorithm" by Kiessling et al.
+            https://arxiv.org/pdf/2409.09208
+            NOTE: preliminary implementation
         """
         return self.__globalization
 
@@ -259,7 +276,7 @@ class AcadosOcpOptions:
 
         - MIRROR: performs eigenvalue decomposition H = V^T D V and sets D_ii = max(eps, abs(D_ii))
         - PROJECT: performs eigenvalue decomposition H = V^T D V and sets D_ii = max(eps, D_ii)
-        - CONVEXIFY: Algorithm 6 from Verschueren2017, https://cdn.syscop.de/publications/Verschueren2017.pdf
+        - CONVEXIFY: Algorithm 6 from Verschueren2017, https://cdn.syscop.de/publications/Verschueren2017.pdf, does not support nonlinear constraints
         - PROJECT_REDUC_HESS: experimental
 
         Note: default eps = 1e-4
@@ -269,13 +286,30 @@ class AcadosOcpOptions:
         return self.__regularize_method
 
     @property
-    def nlp_solver_step_length(self):
+    def globalization_fixed_step_length(self):
         """
-        Fixed Newton step length.
+        Fixed Newton step length, used if globalization == "FIXED_STEP"
         Type: float >= 0.
         Default: 1.0.
         """
-        return self.__nlp_solver_step_length
+        return self.__globalization_fixed_step_length
+
+    @property
+    def nlp_solver_step_length(self):
+        """
+        This option is deprecated and has new name: globalization_fixed_step_length
+        """
+        print("The option nlp_solver_step_length is deprecated and has new name: globalization_fixed_step_length")
+        return self.__globalization_fixed_step_length
+
+    @property
+    def nlp_solver_warm_start_first_qp(self):
+        """
+        Flag indicating whether the first QP in an NLP solve should be warm started.
+        Type: int.
+        Default: 0.
+        """
+        return self.__nlp_solver_warm_start_first_qp
 
     @property
     def levenberg_marquardt(self):
@@ -370,6 +404,16 @@ class AcadosOcpOptions:
         return self.__qp_solver_cond_N
 
     @property
+    def qp_solver_cond_block_size(self):
+        """QP solver: list of integers of length qp_solver_cond_N + 1
+        Denotes how many blocks of the original OCP are lumped together into one in partial condensing.
+        Note that the last entry is the number of blocks that are condensed into the terminal cost of the partially condensed QP.
+        Default: None -> compute even block size distribution based on qp_solver_cond_N
+        """
+        return self.__qp_solver_cond_block_size
+
+
+    @property
     def qp_solver_warm_start(self):
         """
         QP solver: Warm starting.
@@ -406,6 +450,16 @@ class AcadosOcpOptions:
         Default: 1
         """
         return self.__qp_solver_ric_alg
+
+    @property
+    def qp_solver_mu0(self):
+        """
+        For HPIPM QP solver: Initial value for the barrier parameter.
+        If 0, the default value according to hpipm_mode is used.
+
+        Default: 0
+        """
+        return self.__qp_solver_mu0
 
     @property
     def qp_solver_iter_max(self):
@@ -492,6 +546,15 @@ class AcadosOcpOptions:
         return self.__log_primal_step_norm
 
     @property
+    def store_iterates(self,):
+        """
+        Flag indicating whether the intermediate primal-dual iterates should be stored.
+        This is implemented only for solver type `SQP` and `DDP`.
+        Default: False
+        """
+        return self.__store_iterates
+
+    @property
     def tol(self):
         """
         NLP solver tolerance. Sets or gets the max of :py:attr:`nlp_solver_tol_eq`,
@@ -528,9 +591,40 @@ class AcadosOcpOptions:
         return self.__nlp_solver_tol_eq
 
     @property
+    def nlp_solver_tol_min_step_norm(self):
+        """
+        NLP solver tolerance for minimal step norm. Solver terminates if
+        step norm is below given value. If value is 0.0, then the solver does not
+        test for the small step.
+
+        Type: float
+        Default: None
+
+        If None:
+        in case of FUNNEL_L1PEN_LINESEARCH: 1e-12
+        otherwise: 0.0
+         """
+        return self.__nlp_solver_tol_min_step_norm
+
+    @property
+    def globalization_alpha_min(self):
+        """Minimal step size for globalization.
+
+        default: None.
+
+        If None is given:
+        - in case of FUNNEL_L1PEN_LINESEARCH, value is set to 1e-17.
+        - in case of MERIT_BACKTRACKING, value is set to 0.05.
+        """
+        return self.__globalization_alpha_min
+
+    @property
     def alpha_min(self):
-        """Minimal step size for globalization MERIT_BACKTRACKING, default: 0.05."""
-        return self.__alpha_min
+        """
+        The option alpha_min is deprecated and has new name: globalization_alpha_min
+        """
+        print("The option alpha_min is deprecated and has new name: globalization_alpha_min")
+        return self.globalization_alpha_min
 
     @property
     def reg_epsilon(self):
@@ -538,27 +632,65 @@ class AcadosOcpOptions:
         return self.__reg_epsilon
 
     @property
-    def alpha_reduction(self):
-        """Step size reduction factor for globalization MERIT_BACKTRACKING, default: 0.7."""
-        return self.__alpha_reduction
+    def globalization_alpha_reduction(self):
+        """Step size reduction factor for globalization MERIT_BACKTRACKING,
+
+        Type: float
+        Default: None.
+
+        If None is given:
+        - in case of FUNNEL_L1PEN_LINESEARCH, value is set to 0.5.
+        - in case of MERIT_BACKTRACKING, value is set to 0.7.
+        default: 0.7.
+        """
+        return self.__globalization_alpha_reduction
 
     @property
-    def line_search_use_sufficient_descent(self):
+    def alpha_reduction(self):
+        """
+        The option alpha_reduction is deprecated and has new name: globalization_alpha_reduction
+        """
+        print("The option alpha_reduction is deprecated and has new name: globalization_alpha_reduction")
+        return self.globalization_alpha_reduction
+
+    @property
+    def globalization_line_search_use_sufficient_descent(self):
         """
         Determines if sufficient descent (Armijo) condition is used in line search.
         Type: int; 0 or 1;
         default: 0.
         """
-        return self.__line_search_use_sufficient_descent
+        return self.__globalization_line_search_use_sufficient_descent
+
+    @property
+    def line_search_use_sufficient_descent(self):
+        """
+        The option line_search_use_sufficient_descent is deprecated and has new name: globalization_line_search_use_sufficient_descent
+        """
+        print("The option line_search_use_sufficient_descent is deprecated and has new name: globalization_line_search_use_sufficient_descent")
+        return self.globalization_line_search_use_sufficient_descent
+
+    @property
+    def globalization_eps_sufficient_descent(self):
+        """
+        Factor for sufficient descent (Armijo) conditon, see also globalization_line_search_use_sufficient_descent.
+
+        Type: float,
+        Default: None.
+
+        If None is given:
+        - in case of FUNNEL_L1PEN_LINESEARCH, value is set to 1e-6.
+        - in case of MERIT_BACKTRACKING, value is set to 1e-4.
+        """
+        return self.__globalization_eps_sufficient_descent
 
     @property
     def eps_sufficient_descent(self):
         """
-        Factor for sufficient descent (Armijo) conditon, see line_search_use_sufficient_descent.
-        Type: float,
-        default: 1e-4.
+        The option eps_sufficient_descent is deprecated and has new name: globalization_line_search_use_sufficient_descent
         """
-        return self.__eps_sufficient_descent
+        print("The option eps_sufficient_descent is deprecated and has new name: globalization_line_search_use_sufficient_descent")
+        return self.globalization_line_search_use_sufficient_descent
 
     @property
     def globalization_use_SOC(self):
@@ -571,13 +703,104 @@ class AcadosOcpOptions:
         return self.__globalization_use_SOC
 
     @property
-    def full_step_dual(self):
+    def globalization_full_step_dual(self):
         """
         Determines if dual variables are updated with full steps (alpha=1.0) when primal variables are updated with smaller step.
+
         Type: int; 0 or 1;
-        default: 0.
+        default for funnel globalization: 1
+        default else: 0.
         """
-        return self.__full_step_dual
+        return self.__globalization_full_step_dual
+
+    @property
+    def full_step_dual(self):
+        """
+        The option full_step_dual is deprecated and has new name: globalization_full_step_dual
+        """
+        print("The option full_step_dual is deprecated and has new name: globalization_full_step_dual")
+        return self.globalization_full_step_dual
+
+    @property
+    def globalization_funnel_init_increase_factor(self):
+        """
+        Increase factor for initialization of funnel width.
+        Initial funnel is max(globalization_funnel_init_upper_bound, globalization_funnel_init_increase_factor * initial_infeasibility)
+
+        Type: float
+        Default: 15.0
+        """
+        return self.__globalization_funnel_init_increase_factor
+
+    @property
+    def globalization_funnel_init_upper_bound(self):
+        """
+        Initial upper bound for funnel width.
+        Initial funnel is max(globalization_funnel_init_upper_bound, globalization_funnel_init_increase_factor * initial_infeasibility)
+
+        Type: float
+        Default: 1.0
+        """
+        return self.__globalization_funnel_init_upper_bound
+
+    @property
+    def globalization_funnel_sufficient_decrease_factor(self):
+        """
+        Sufficient decrease factor for infeasibility in h iteration:
+        trial_infeasibility <= kappa * globalization_funnel_width
+
+        Type: float
+        Default: 0.9
+        """
+        return self.__globalization_funnel_sufficient_decrease_factor
+
+    @property
+    def globalization_funnel_kappa(self):
+        """
+        Interpolation factor for convex combination in funnel decrease function.
+
+        Type: float
+        Default: 0.9
+        """
+        return self.__globalization_funnel_kappa
+
+    @property
+    def globalization_funnel_fraction_switching_condition(self):
+        """
+        Multiplication factor in switching condition.
+
+        Type: float
+        Default: 1e-3
+        """
+        return self.__globalization_funnel_fraction_switching_condition
+
+    @property
+    def eval_residual_at_max_iter(self):
+        """
+        Determines, if the problem data is again evaluated after the last iteration
+        has been performed.
+        If True, the residuals are evaluated at the last iterate and convergence will be checked.
+        If False, after the last iteration, the solver will terminate with max iterations
+        status, although the final iterate might fulfill the convergence criteria.
+
+        Type: bool
+        Default: None
+
+        If None is given:
+        if globalization == FUNNEL_L1PEN_LINESEARCH: true
+        else: false
+        """
+        return self.__eval_residual_at_max_iter
+
+    @property
+    def globalization_funnel_initial_penalty_parameter(self):
+        """
+        Initialization.
+
+        Type: float
+        Default: 1.0
+        """
+        return self.__globalization_funnel_initial_penalty_parameter
 
     @property
     def nlp_solver_tol_ineq(self):
@@ -612,7 +835,7 @@ class AcadosOcpOptions:
     def nlp_solver_max_iter(self):
         """
         NLP solver maximum number of iterations.
-        Type: int > 0
+        Type: int >= 0
         Default: 100
         """
         return self.__nlp_solver_max_iter
@@ -643,9 +866,18 @@ class AcadosOcpOptions:
         return self.__tf
 
     @property
+    def N_horizon(self):
+        """
+        Number of shooting intervals.
+        Type: int > 0
+        Default: :code:`None`
+        """
+        return self.__N_horizon
+
+    @property
     def Tsim(self):
         """
-        Time horizon for one integrator step. Automatically calculated as :py:attr:`tf`/:py:attr:`N`.
+        Time horizon for one integrator step. Automatically calculated as first time step if not provided.
         Default: :code:`None`
         """
         return self.__Tsim
@@ -654,8 +886,14 @@ class AcadosOcpOptions:
     def print_level(self):
         """
         Verbosity of printing.
+
         Type: int >= 0
         Default: 0
+
+        Level 1: print iteration log
+        Level 2: print high level debug output in funnel globalization
+        Level 3: print more detailed debug output in funnel, including objective values and infeasibilities
+        Level 4: print QP inputs and outputs. Please specify with max_iter how many QPs should be printed
         """
         return self.__print_level
 
@@ -862,25 +1100,22 @@ class AcadosOcpOptions:
     def tf(self, tf):
         self.__tf = tf
 
+    @N_horizon.setter
+    def N_horizon(self, N_horizon):
+        if isinstance(N_horizon, int) and N_horizon > 0:
+            self.__N_horizon = N_horizon
+        else:
+            raise Exception('Invalid N_horizon value, expected positive integer.')
+
     @time_steps.setter
     def time_steps(self, time_steps):
-        if isinstance(time_steps, np.ndarray):
-            if len(time_steps.shape) == 1:
-                    self.__time_steps = time_steps
-            else:
-                raise Exception('Invalid time_steps, expected np.ndarray of shape (N,).')
-        else:
-            raise Exception('Invalid time_steps, expected np.ndarray.')
+        time_steps = check_if_nparray_and_flatten(time_steps, "time_steps")
+        self.__time_steps = time_steps
 
     @shooting_nodes.setter
     def shooting_nodes(self, shooting_nodes):
-        if isinstance(shooting_nodes, np.ndarray):
-            if len(shooting_nodes.shape) == 1:
-                self.__shooting_nodes = shooting_nodes
-            else:
-                raise Exception('Invalid shooting_nodes, expected np.ndarray of shape (N+1,).')
-        else:
-            raise Exception('Invalid shooting_nodes, expected np.ndarray.')
+        shooting_nodes = check_if_nparray_and_flatten(shooting_nodes, "shooting_nodes")
+        self.__shooting_nodes = shooting_nodes
 
     @Tsim.setter
     def Tsim(self, Tsim):
@@ -888,7 +1123,7 @@ class AcadosOcpOptions:
 
     @globalization.setter
     def globalization(self, globalization):
-        globalization_types = ('MERIT_BACKTRACKING', 'FIXED_STEP')
+        globalization_types = ('FUNNEL_L1PEN_LINESEARCH', 'MERIT_BACKTRACKING', 'FIXED_STEP')
         if globalization in globalization_types:
             self.__globalization = globalization
         else:
@@ -899,20 +1134,38 @@ class AcadosOcpOptions:
     def reg_epsilon(self, reg_epsilon):
         self.__reg_epsilon = reg_epsilon
 
+    @globalization_alpha_min.setter
+    def globalization_alpha_min(self, globalization_alpha_min):
+        self.__globalization_alpha_min = globalization_alpha_min
+
     @alpha_min.setter
     def alpha_min(self, alpha_min):
-        self.__alpha_min = alpha_min
+        print("This option is deprecated and has new name: globalization_alpha_min")
+        self.globalization_alpha_min = alpha_min
+
+    @globalization_alpha_reduction.setter
+    def globalization_alpha_reduction(self, globalization_alpha_reduction):
+        self.__globalization_alpha_reduction = globalization_alpha_reduction
 
     @alpha_reduction.setter
-    def alpha_reduction(self, alpha_reduction):
-        self.__alpha_reduction = alpha_reduction
+    def alpha_reduction(self, globalization_alpha_reduction):
+        print("This option is deprecated and has new name: globalization_alpha_reduction")
+        self.globalization_alpha_reduction = globalization_alpha_reduction
+
+    @globalization_line_search_use_sufficient_descent.setter
+    def globalization_line_search_use_sufficient_descent(self, globalization_line_search_use_sufficient_descent):
+        if globalization_line_search_use_sufficient_descent in [0, 1]:
+            self.__globalization_line_search_use_sufficient_descent = globalization_line_search_use_sufficient_descent
+        else:
+            raise Exception(f'Invalid value for globalization_line_search_use_sufficient_descent. Possible values are 0, 1, got {globalization_line_search_use_sufficient_descent}')
 
     @line_search_use_sufficient_descent.setter
-    def line_search_use_sufficient_descent(self, line_search_use_sufficient_descent):
-        if line_search_use_sufficient_descent in [0, 1]:
-            self.__line_search_use_sufficient_descent = line_search_use_sufficient_descent
+    def line_search_use_sufficient_descent(self, globalization_line_search_use_sufficient_descent):
+        print("This option is deprecated and has new name: globalization_line_search_use_sufficient_descent")
+        if globalization_line_search_use_sufficient_descent in [0, 1]:
+            self.__globalization_line_search_use_sufficient_descent = globalization_line_search_use_sufficient_descent
         else:
-            raise Exception(f'Invalid value for line_search_use_sufficient_descent. Possible values are 0, 1, got {line_search_use_sufficient_descent}')
+            raise Exception(f'Invalid value for globalization_line_search_use_sufficient_descent. Possible values are 0, 1, got {globalization_line_search_use_sufficient_descent}')
 
     @globalization_use_SOC.setter
     def globalization_use_SOC(self, globalization_use_SOC):
@@ -921,19 +1174,79 @@ class AcadosOcpOptions:
         else:
             raise Exception(f'Invalid value for globalization_use_SOC. Possible values are 0, 1, got {globalization_use_SOC}')
 
-    @full_step_dual.setter
-    def full_step_dual(self, full_step_dual):
-        if full_step_dual in [0, 1]:
-            self.__full_step_dual = full_step_dual
+    @globalization_full_step_dual.setter
+    def globalization_full_step_dual(self, globalization_full_step_dual):
+        if globalization_full_step_dual in [0, 1]:
+            self.__globalization_full_step_dual = globalization_full_step_dual
         else:
-            raise Exception(f'Invalid value for full_step_dual. Possible values are 0, 1, got {full_step_dual}')
+            raise Exception(f'Invalid value for globalization_full_step_dual. Possible values are 0, 1, got {globalization_full_step_dual}')
+
+    @full_step_dual.setter
+    def full_step_dual(self, globalization_full_step_dual):
+        print("This option is deprecated and has new name: globalization_full_step_dual")
+        self.globalization_full_step_dual = globalization_full_step_dual
+
+
+    @globalization_funnel_init_increase_factor.setter
+    def globalization_funnel_init_increase_factor(self, globalization_funnel_init_increase_factor):
+        if globalization_funnel_init_increase_factor > 1.0:
+            self.__globalization_funnel_init_increase_factor = globalization_funnel_init_increase_factor
+        else:
+            raise Exception(f'Invalid value for globalization_funnel_init_increase_factor. Should be > 1, got {globalization_funnel_init_increase_factor}')
+
+    @globalization_funnel_init_upper_bound.setter
+    def globalization_funnel_init_upper_bound(self, globalization_funnel_init_upper_bound):
+        if globalization_funnel_init_upper_bound > 0.0:
+            self.__globalization_funnel_init_upper_bound = globalization_funnel_init_upper_bound
+        else:
+             raise Exception(f'Invalid value for globalization_funnel_init_upper_bound. Should be > 0, got {globalization_funnel_init_upper_bound}')
+
+    @globalization_funnel_sufficient_decrease_factor.setter
+    def globalization_funnel_sufficient_decrease_factor(self, globalization_funnel_sufficient_decrease_factor):
+        if globalization_funnel_sufficient_decrease_factor > 0.0 and globalization_funnel_sufficient_decrease_factor < 1.0:
+            self.__globalization_funnel_sufficient_decrease_factor = globalization_funnel_sufficient_decrease_factor
+        else:
+            raise Exception(f'Invalid value for globalization_funnel_sufficient_decrease_factor. Should be in (0,1), got {globalization_funnel_sufficient_decrease_factor}')
+
+    @globalization_funnel_kappa.setter
+    def globalization_funnel_kappa(self, globalization_funnel_kappa):
+        if globalization_funnel_kappa > 0.0 and globalization_funnel_kappa < 1.0:
+            self.__globalization_funnel_kappa = globalization_funnel_kappa
+        else:
+            raise Exception(f'Invalid value for globalization_funnel_kappa. Should be in (0,1), got {globalization_funnel_kappa}')
+
+    @globalization_funnel_fraction_switching_condition.setter
+    def globalization_funnel_fraction_switching_condition(self, globalization_funnel_fraction_switching_condition):
+        if globalization_funnel_fraction_switching_condition > 0.0 and globalization_funnel_fraction_switching_condition < 1.0:
+            self.__globalization_funnel_fraction_switching_condition = globalization_funnel_fraction_switching_condition
+        else:
+            raise Exception(f'Invalid value for globalization_funnel_fraction_switching_condition. Should be in (0,1), got {globalization_funnel_fraction_switching_condition}')
+
+    @globalization_funnel_initial_penalty_parameter.setter
+    def globalization_funnel_initial_penalty_parameter(self, globalization_funnel_initial_penalty_parameter):
+        if globalization_funnel_initial_penalty_parameter >= 0.0 and globalization_funnel_initial_penalty_parameter <= 1.0:
+            self.__globalization_funnel_initial_penalty_parameter = globalization_funnel_initial_penalty_parameter
+        else:
+            raise Exception(f'Invalid value for globalization_funnel_initial_penalty_parameter. Should be in [0,1], got {globalization_funnel_initial_penalty_parameter}')
+
+    @eval_residual_at_max_iter.setter
+    def eval_residual_at_max_iter(self, eval_residual_at_max_iter):
+        if isinstance(eval_residual_at_max_iter, bool):
+            self.__eval_residual_at_max_iter = eval_residual_at_max_iter
+        else:
+            raise Exception(f'Invalid datatype for eval_residual_at_max_iter. Should be bool, got {type(eval_residual_at_max_iter)}')
+
+    @globalization_eps_sufficient_descent.setter
+    def globalization_eps_sufficient_descent(self, globalization_eps_sufficient_descent):
+        if isinstance(globalization_eps_sufficient_descent, float) and globalization_eps_sufficient_descent > 0:
+            self.__globalization_eps_sufficient_descent = globalization_eps_sufficient_descent
+        else:
+            raise Exception('Invalid globalization_eps_sufficient_descent value. globalization_eps_sufficient_descent must be a positive float.')
 
     @eps_sufficient_descent.setter
-    def eps_sufficient_descent(self, eps_sufficient_descent):
-        if isinstance(eps_sufficient_descent, float) and eps_sufficient_descent > 0:
-            self.__eps_sufficient_descent = eps_sufficient_descent
-        else:
-            raise Exception('Invalid eps_sufficient_descent value. eps_sufficient_descent must be a positive float.')
+    def eps_sufficient_descent(self, globalization_eps_sufficient_descent):
+        print("This option is deprecated and has new name: globalization_eps_sufficient_descent")
+        self.globalization_eps_sufficient_descent = globalization_eps_sufficient_descent
 
     @sim_method_num_stages.setter
     def sim_method_num_stages(self, sim_method_num_stages):
@@ -991,12 +1304,24 @@ class AcadosOcpOptions:
             raise Exception('Invalid cost_discretization value. Possible values are:\n\n' \
                     + ',\n'.join(COST_DISCRETIZATION_TYPES) + '.\n\nYou have: ' + cost_discretization + '.')
 
+    @globalization_fixed_step_length.setter
+    def globalization_fixed_step_length(self, globalization_fixed_step_length):
+        if isinstance(globalization_fixed_step_length, float) and globalization_fixed_step_length >= 0.:
+            self.__globalization_fixed_step_length = globalization_fixed_step_length
+        else:
+            raise Exception('Invalid globalization_fixed_step_length value. globalization_fixed_step_length must be a positive float.')
+
     @nlp_solver_step_length.setter
     def nlp_solver_step_length(self, nlp_solver_step_length):
-        if isinstance(nlp_solver_step_length, float) and nlp_solver_step_length >= 0:
-            self.__nlp_solver_step_length = nlp_solver_step_length
+        print("The option nlp_solver_step_length is deprecated and has new name: globalization_fixed_step_length")
+        self.globalization_fixed_step_length = nlp_solver_step_length
+
+    @nlp_solver_warm_start_first_qp.setter
+    def nlp_solver_warm_start_first_qp(self, nlp_solver_warm_start_first_qp):
+        if isinstance(nlp_solver_warm_start_first_qp, bool):
+            self.__nlp_solver_warm_start_first_qp = nlp_solver_warm_start_first_qp
         else:
-            raise Exception('Invalid nlp_solver_step_length value. nlp_solver_step_length must be a positive float.')
+            raise Exception('Invalid nlp_solver_warm_start_first_qp value. Expected bool.')
 
     @levenberg_marquardt.setter
     def levenberg_marquardt(self, levenberg_marquardt):
@@ -1004,6 +1329,13 @@ class AcadosOcpOptions:
             self.__levenberg_marquardt = levenberg_marquardt
         else:
             raise Exception('Invalid levenberg_marquardt value. levenberg_marquardt must be a positive float.')
+
+    @qp_solver_mu0.setter
+    def qp_solver_mu0(self, qp_solver_mu0):
+        if isinstance(qp_solver_mu0, float) and qp_solver_mu0 >= 0:
+            self.__qp_solver_mu0 = qp_solver_mu0
+        else:
+            raise Exception('Invalid qp_solver_mu0 value. qp_solver_mu0 must be a positive float.')
 
     @qp_solver_iter_max.setter
     def qp_solver_iter_max(self, qp_solver_iter_max):
@@ -1047,6 +1379,13 @@ class AcadosOcpOptions:
         else:
             raise Exception('Invalid log_primal_step_norm value. Expected bool.')
 
+    @store_iterates.setter
+    def store_iterates(self, val):
+        if isinstance(val, bool):
+            self.__store_iterates = val
+        else:
+            raise Exception('Invalid store_iterates value. Expected bool.')
+
     @as_rti_iter.setter
     def as_rti_iter(self, as_rti_iter):
         if isinstance(as_rti_iter, int) and as_rti_iter >= 0:
@@ -1083,6 +1422,15 @@ class AcadosOcpOptions:
             self.__qp_solver_cond_N = qp_solver_cond_N
         else:
             raise Exception('Invalid qp_solver_cond_N value. qp_solver_cond_N must be a positive int.')
+
+    @qp_solver_cond_block_size.setter
+    def qp_solver_cond_block_size(self, qp_solver_cond_block_size):
+        if not isinstance(qp_solver_cond_block_size, list):
+            raise Exception('Invalid qp_solver_cond_block_size value. qp_solver_cond_block_size must be a list of nonnegative integers.')
+        for i in qp_solver_cond_block_size:
+            if not isinstance(i, int) or not i >= 0:
+                raise Exception('Invalid qp_solver_cond_block_size value. qp_solver_cond_block_size must be a list of nonnegative integers.')
+        self.__qp_solver_cond_block_size = qp_solver_cond_block_size
 
     @qp_solver_warm_start.setter
     def qp_solver_warm_start(self, qp_solver_warm_start):
@@ -1160,6 +1508,13 @@ class AcadosOcpOptions:
         else:
             raise Exception('Invalid nlp_solver_tol_ineq value. nlp_solver_tol_ineq must be a positive float.')
 
+    @nlp_solver_tol_min_step_norm.setter
+    def nlp_solver_tol_min_step_norm(self, nlp_solver_tol_min_step_norm):
+        if isinstance(nlp_solver_tol_min_step_norm, float) and nlp_solver_tol_min_step_norm >= 0.0:
+            self.__nlp_solver_tol_min_step_norm = nlp_solver_tol_min_step_norm
+        else:
+            raise Exception('Invalid nlp_solver_tol_min_step_norm value. nlp_solver_tol_min_step_norm must be a positive float.')
+
     @nlp_solver_ext_qp_res.setter
     def nlp_solver_ext_qp_res(self, nlp_solver_ext_qp_res):
         if nlp_solver_ext_qp_res in [0, 1]:
@@ -1184,10 +1539,10 @@ class AcadosOcpOptions:
     @nlp_solver_max_iter.setter
     def nlp_solver_max_iter(self, nlp_solver_max_iter):
 
-        if isinstance(nlp_solver_max_iter, int) and nlp_solver_max_iter > 0:
+        if isinstance(nlp_solver_max_iter, int) and nlp_solver_max_iter >= 0:
             self.__nlp_solver_max_iter = nlp_solver_max_iter
         else:
-            raise Exception('Invalid nlp_solver_max_iter value. nlp_solver_max_iter must be a positive int.')
+            raise Exception('Invalid nlp_solver_max_iter value. nlp_solver_max_iter must be a nonnegative int.')
 
     @print_level.setter
     def print_level(self, print_level):

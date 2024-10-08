@@ -31,7 +31,7 @@ import os
 
 import numpy as np
 import scipy.linalg
-from acados_template import AcadosOcp, AcadosOcpSolver, ZoroDescription, get_default_simulink_opts
+from acados_template import AcadosOcp, AcadosOcpSolver, ZoroDescription, get_simulink_default_opts
 
 # same as in normal pendulum model
 local_path = os.path.dirname(os.path.abspath(__file__))
@@ -57,7 +57,7 @@ def main():
     N = 20
 
     # set dimensions
-    ocp.dims.N = N
+    ocp.solver_options.N_horizon = N
 
     # set cost
     Q = 2 * np.diag([1e3, 1e3, 1e-2, 1e-2])
@@ -100,8 +100,8 @@ def main():
     ocp.constraints.idxbx_e = np.array([1])
 
     # initial state
-    x_init = np.array([0.0, 0.15*np.pi, 0.0, 0.0])
-    ocp.constraints.x0 = x_init
+    x0 = np.array([0.0, 0.15*np.pi, 0.0, 0.0])
+    ocp.constraints.x0 = x0
 
     # set options
     ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM' # FULL_CONDENSING_QPOASES
@@ -136,7 +136,7 @@ def main():
     ocp.zoro_description = zoro_description
 
     # to export Simulink block
-    simulink_opts = get_default_simulink_opts()
+    simulink_opts = get_simulink_default_opts()
     simulink_opts['inputs']['lbx'] = 0
     simulink_opts['inputs']['ubx'] = 0
     simulink_opts['inputs']['lbx_e'] = 0
@@ -147,7 +147,7 @@ def main():
     Nsim = 100
     simX = np.zeros((Nsim+1, nx))
     simU = np.zeros((Nsim, nu))
-    simX[0,:] = x_init
+    simX[0,:] = x0
 
     # zoro parameters
     max_zoro_iter = 100

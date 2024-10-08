@@ -44,7 +44,7 @@ import numpy as np
 from casadi import DM, MX, SX, CasadiMeta, Function
 
 ALLOWED_CASADI_VERSIONS = (
-    '3.4.0'
+    '3.4.0',
     '3.4.5',
     '3.5.1',
     '3.5.2',
@@ -57,6 +57,8 @@ ALLOWED_CASADI_VERSIONS = (
     '3.6.2',
     '3.6.3',
     '3.6.4',
+    '3.6.5',
+    '3.6.6',
 )
 
 TERA_VERSION = "0.0.34"
@@ -67,6 +69,7 @@ PLATFORM2TERA = {
     "win32": "windows"
 }
 
+ACADOS_INFTY = 1e10
 
 def check_if_square(mat: np.ndarray, name: str):
     if mat.shape[0] != mat.shape[1]:
@@ -137,6 +140,12 @@ def check_casadi_version():
         msg += 'please consider changing your CasADi version.\n'
         msg += 'Version {} currently in use.'.format(casadi_version)
         print(msg)
+
+def check_casadi_version_supports_p_global():
+    try:
+        from casadi import extract_parametric, cse, blazing_spline
+    except:
+        raise Exception("CasADi version does not support extract_parametric or cse functions.\nNeeds nightly-se2 release or later, see: https://github.com/casadi/casadi/releases/tag/nightly-se2")
 
 
 def get_simulink_default_opts():
@@ -214,7 +223,7 @@ def get_shared_lib_prefix():
     else:
         return 'lib'
 
-def get_tera():
+def get_tera() -> str:
     tera_path = get_tera_exec_path()
     acados_path = get_acados_path()
 
@@ -256,6 +265,7 @@ def get_tera():
     if not os.path.exists(tera_dir):
         print(f"Creating directory {tera_dir}")
         os.makedirs(tera_dir)
+
     # Download tera
     print(f"Dowloading {url}")
     with urllib.request.urlopen(url) as response, open(tera_path, 'wb') as out_file:
@@ -263,7 +273,7 @@ def get_tera():
     print("Successfully downloaded t_renderer.")
     # make executable
     os.chmod(tera_path, 0o755)
-    print("Successfully downloaded t_renderer.")
+    print("Successfully made t_renderer executable.")
     return tera_path
 
 
@@ -334,14 +344,16 @@ def format_class_dict(d):
     return out
 
 def get_default_simulink_opts() -> dict:
-    python_interface_path = get_python_interface_path()
-    abs_path = os.path.join(python_interface_path, 'simulink_default_opts.json')
-    with open(abs_path, 'r') as f:
-        simulink_opts = json.load(f)
-    return simulink_opts
+    print("get_default_simulink_opts is deprecated, use get_simulink_default_opts instead."
+          + " This function will be removed in a future release.")
+    return get_simulink_default_opts()
 
 
 def J_to_idx(J):
+    if not isinstance(J, np.ndarray):
+        raise Exception('J_to_idx: J must be a numpy array.')
+    if J.ndim != 2:
+        raise Exception('J_to_idx: J must be a 2D numpy array.')
     nrows = J.shape[0]
     idx = np.zeros((nrows, ))
     for i in range(nrows):
@@ -376,11 +388,18 @@ def J_to_idx_slack(J):
     return idx
 
 
-def check_if_nparray_and_flatten(val, name):
+def check_if_nparray_and_flatten(val, name) -> np.ndarray:
     if not isinstance(val, np.ndarray):
         raise Exception(f"{name} must be a numpy array, got {type(val)}")
     return val.reshape(-1)
 
+
+def check_if_2d_nparray(val, name) -> None:
+    if not isinstance(val, np.ndarray):
+        raise Exception(f"{name} must be a numpy array, got {type(val)}")
+    if val.ndim != 2:
+        raise Exception(f"{name} must be a 2D numpy array, got shape {val.shape}")
+    return
 
 def print_J_to_idx_note():
     print("NOTE: J* matrix is converted to zero based vector idx* vector, which is returned here.")
@@ -442,8 +461,8 @@ def set_up_imported_gnsf_model(acados_ocp):
     #  {A, B, C, E, L_x, L_xdot, L_z, L_u, A_LO, c, E_LO, B_LO,...
     #   nontrivial_f_LO, purely_linear, ipiv_x, ipiv_z, c_LO});
     get_matrices_out = get_matrices_fun(0)
-    acados_ocp.model.gnsf['nontrivial_f_LO'] = int(get_matrices_out[12])
-    acados_ocp.model.gnsf['purely_linear'] = int(get_matrices_out[13])
+    acados_ocp.model.gnsf_nontrivial_f_LO = int(get_matrices_out[12])
+    acados_ocp.model.gnsf_purely_linear = int(get_matrices_out[13])
 
     if "f_lo_fun_jac_x1k1uz" in gnsf:
         f_lo_fun_jac_x1k1uz = Function.deserialize(gnsf['f_lo_fun_jac_x1k1uz'])
