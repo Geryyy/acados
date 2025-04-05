@@ -34,8 +34,8 @@
 #include <assert.h>
 #include <string.h>
 // blasfeo
-#include "blasfeo/include/blasfeo_d_aux.h"
-#include "blasfeo/include/blasfeo_d_blas.h"
+#include "blasfeo_d_aux.h"
+#include "blasfeo_d_blas.h"
 
 /* Ignore compiler warnings from qpOASES */
 #if defined(__clang__)
@@ -198,6 +198,13 @@ void dense_qp_qpoases_opts_set(void *config_, void *opts_, const char *field, vo
     return;
 }
 
+
+void dense_qp_qpoases_opts_get(void *config_, void *opts_, const char *field, void *value)
+{
+    // dense_qp_qpoases_opts *opts = opts_;
+    printf("\nerror: dense_qp_qpoases_opts_get: not implemented for field: %s\n", field);
+    exit(1);
+}
 
 
 /************************************************
@@ -764,13 +771,11 @@ void dense_qp_qpoases_eval_sens(void *config_, void *qp_in, void *qp_out, void *
 }
 
 
-// void dense_qp_qpoases_memory_reset(void *config_, dense_qp_in *qp_in, dense_qp_out *qp_out, void *opts_,
-//                      void *memory_, void *work_)
-// {
-//     printf("\nerror: dense_qp_qpoases_memory_reset: not implemented yet\n");
-//     // exit(1);
-// }
-
+void dense_qp_qpoases_eval_adj_sens(void *config_, void *qp_in, void *qp_out, void *opts_, void *mem_, void *work_)
+{
+    printf("\nerror: dense_qp_qpoases_eval_adj_sens: not implemented yet\n");
+    exit(1);
+}
 
 
 void dense_qp_qpoases_memory_reset(void *config, void *qp_in, void *qp_out, void *opts, void *mem, void *work)
@@ -802,6 +807,7 @@ void dense_qp_qpoases_config_initialize_default(void *config_)
         (void (*)(void *, void *, void *)) & dense_qp_qpoases_opts_initialize_default;
     config->opts_update = (void (*)(void *, void *, void *)) & dense_qp_qpoases_opts_update;
     config->opts_set = &dense_qp_qpoases_opts_set;
+    config->opts_get = &dense_qp_qpoases_opts_get;
     config->memory_calculate_size =
         (acados_size_t (*)(void *, void *, void *)) & dense_qp_qpoases_memory_calculate_size;
     config->memory_assign =
@@ -810,7 +816,7 @@ void dense_qp_qpoases_config_initialize_default(void *config_)
     config->workspace_calculate_size =
         (acados_size_t (*)(void *, void *, void *)) & dense_qp_qpoases_workspace_calculate_size;
     config->eval_sens = &dense_qp_qpoases_eval_sens;
-    // config->memory_reset = &dense_qp_qpoases_memory_reset;
+    config->eval_adj_sens = &dense_qp_qpoases_eval_adj_sens;
     config->evaluate = (int (*)(void *, void *, void *, void *, void *, void *)) & dense_qp_qpoases;
     config->memory_reset = &dense_qp_qpoases_memory_reset;
     config->solver_get = &dense_qp_qpoases_solver_get;

@@ -34,8 +34,8 @@
 #include <math.h>
 #include <string.h>
 // blasfeo
-#include "blasfeo/include/blasfeo_d_aux.h"
-#include "blasfeo/include/blasfeo_d_aux_ext_dep.h"
+#include "blasfeo_d_aux.h"
+#include "blasfeo_d_aux_ext_dep.h"
 // acados
 #include "acados/dense_qp/dense_qp_common.h"
 #include "acados/dense_qp/dense_qp_qore.h"
@@ -132,6 +132,15 @@ void dense_qp_qore_opts_set(void *config_, void *opts_, const char *field, void 
 
     return;
 }
+
+
+void dense_qp_qore_opts_get(void *config_, void *opts_, const char *field, void *value)
+{
+    // dense_qp_qore_opts *opts = opts_;
+    printf("\nerror: dense_qp_qore_opts_get: not implemented for field: %s\n", field);
+    exit(1);
+}
+
 
 
 
@@ -556,6 +565,13 @@ void dense_qp_qore_eval_sens(void *config_, void *qp_in, void *qp_out, void *opt
     exit(1);
 }
 
+void dense_qp_qore_eval_adj_sens(void *config_, void *qp_in, void *qp_out, void *opts_, void *mem_, void *work_)
+{
+    printf("\nerror: dense_qp_qore_eval_adj_sens: not implemented yet\n");
+    exit(1);
+}
+
+
 void dense_qp_qore_memory_reset(void *config, void *qp_in, void *qp_out, void *opts, void *mem, void *work)
 {
     printf("\nerror: dense_qp_qore_memory_reset: not implemented yet\n");
@@ -583,6 +599,7 @@ void dense_qp_qore_config_initialize_default(void *config_)
         (void (*)(void *, void *, void *)) & dense_qp_qore_opts_initialize_default;
     config->opts_update = (void (*)(void *, void *, void *)) & dense_qp_qore_opts_update;
     config->opts_set = &dense_qp_qore_opts_set;
+    config->opts_get = &dense_qp_qore_opts_get;
     config->memory_calculate_size =
         (acados_size_t (*)(void *, void *, void *)) & dense_qp_qore_memory_calculate_size;
     config->memory_assign =
@@ -592,6 +609,7 @@ void dense_qp_qore_config_initialize_default(void *config_)
         (acados_size_t (*)(void *, void *, void *)) & dense_qp_qore_workspace_calculate_size;
     config->evaluate = (int (*)(void *, void *, void *, void *, void *, void *)) & dense_qp_qore;
     config->eval_sens = &dense_qp_qore_eval_sens;
+    config->eval_adj_sens = &dense_qp_qore_eval_adj_sens;
     config->memory_reset = &dense_qp_qore_memory_reset;
     config->solver_get = &dense_qp_qore_solver_get;
     config->terminate = &dense_qp_qore_terminate;

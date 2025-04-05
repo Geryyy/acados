@@ -36,8 +36,8 @@
 #include <string.h>
 
 // blasfeo
-#include "blasfeo/include/blasfeo_d_aux.h"
-#include "blasfeo/include/blasfeo_d_blas.h"
+#include "blasfeo_d_aux.h"
+#include "blasfeo_d_blas.h"
 
 // hpipm
 #include "hpipm/include/hpipm_d_ocp_qp.h"
@@ -131,6 +131,14 @@ ocp_qp_dims *ocp_qp_dims_assign(int N, void *raw_memory)
 
     d_ocp_qp_dim_create(N, dims, c_ptr);
     c_ptr += d_ocp_qp_dim_memsize(N);
+
+    for (int i=0; i<=N; i++)
+    {
+        dims->nsbu[i] = 0;
+        dims->nsbx[i] = 0;
+        dims->nsg[i] = 0;
+        dims->ns[i] = 0;
+    }
 
     assert((char *) raw_memory + ocp_qp_dims_calculate_size(N) >= c_ptr);
 

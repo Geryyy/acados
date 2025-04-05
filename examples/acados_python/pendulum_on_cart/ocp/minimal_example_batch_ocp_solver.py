@@ -40,14 +40,14 @@ import scipy
 import casadi as ca
 
 """
-This example shows how the AcadosOcpBatchSolver can be used to parallelize mulitple OCP solves.
+This example shows how the AcadosOcpBatchSolver can be used to parallelize multiple OCP solves.
 
 If you want to use the batch solver, make sure to compile acados with openmp and num_threads set to 1,
 i.e. with the flags -DACADOS_WITH_OPENMP=ON -DACADOS_NUM_THREADS=1
-The number of threads for the batch solver is then set via the option `num_threads_in_batch_solve`, see below.
+The number of threads for the batch solver is given in its constructor, see below.
 """
 
-def setup_ocp(num_threads_in_batch_solve=1, tol=1e-7):
+def setup_ocp(tol=1e-7):
 
     ocp = AcadosOcp()
 
@@ -89,7 +89,6 @@ def setup_ocp(num_threads_in_batch_solve=1, tol=1e-7):
     ocp.solver_options.nlp_solver_tol_eq = tol
     ocp.solver_options.nlp_solver_tol_ineq = tol
     ocp.solver_options.nlp_solver_tol_comp = tol
-    ocp.solver_options.num_threads_in_batch_solve = num_threads_in_batch_solve
 
     ocp.solver_options.tf = Tf
 
@@ -114,7 +113,7 @@ def main_sequential(x0, N_sim, tol):
         simX[i+1,:] = solver.get(1, "x")
 
     t_elapsed = 1e3 * (time.time() - t0)
-    print("main_sequential:", f"{t_elapsed:.3f}ms")
+    print("main_sequential, solve and get:", f"{t_elapsed:.3f}ms")
 
     return simX, simU
 
@@ -122,27 +121,38 @@ def main_sequential(x0, N_sim, tol):
 def main_batch(Xinit, simU, tol, num_threads_in_batch_solve=1):
 
     N_batch = Xinit.shape[0] - 1
-    ocp = setup_ocp(num_threads_in_batch_solve, tol)
-    batch_solver = AcadosOcpBatchSolver(ocp, N_batch, verbose=False)
+    ocp = setup_ocp(tol)
+    batch_solver = AcadosOcpBatchSolver(ocp, N_batch, num_threads_in_batch_solve=num_threads_in_batch_solve, verbose=False)
+    
+    assert batch_solver.num_threads_in_batch_solve == num_threads_in_batch_solve
+    batch_solver.num_threads_in_batch_solve = 1337
+    assert batch_solver.num_threads_in_batch_solve == 1337
+    batch_solver.num_threads_in_batch_solve = num_threads_in_batch_solve
+    assert batch_solver.num_threads_in_batch_solve == num_threads_in_batch_solve
 
     for n in range(N_batch):
         batch_solver.ocp_solvers[n].constraints_set(0, "lbx", Xinit[n])
         batch_solver.ocp_solvers[n].constraints_set(0, "ubx", Xinit[n])
 
-        # set initial guess
-        for i in range(ocp.solver_options.N_horizon):
-            batch_solver.ocp_solvers[n].set(i, "x", Xinit[n])
+    # set initial guess
+    Xinit_batch = np.array([np.tile(Xinit[i], (ocp.solver_options.N_horizon+1,)) for i in range(N_batch)])
+    t0 = time.time()
+    batch_solver.set_flat('x', Xinit_batch)
+    t_elapsed = 1e3 * (time.time() - t0)
 
+    print(f"main_batch: with {num_threads_in_batch_solve} threads, set_flat: {t_elapsed:.3f}ms")
+
+    # solve
     t0 = time.time()
     batch_solver.solve()
     t_elapsed = 1e3 * (time.time() - t0)
 
-    print(f"main_batch: with {num_threads_in_batch_solve} threads, timing: {t_elapsed:.3f}ms")
+    print(f"main_batch: with {num_threads_in_batch_solve} threads, solve: {t_elapsed:.3f}ms")
+
+    U_batch = batch_solver.get_flat("u")
 
     for n in range(N_batch):
-        u = batch_solver.ocp_solvers[n].get(0, "u")
-
-        if not np.linalg.norm(u-simU[n]) < tol*10:
+        if not np.linalg.norm(U_batch[n, :ocp.dims.nu] -simU[n]) < tol*10:
             raise Exception(f"solution should match sequential call up to {tol*10} got error {np.linalg.norm(u-simU[n])} for {n}th batch solve")
 
 
@@ -151,7 +161,6 @@ if __name__ == "__main__":
     tol = 1e-7
     N_batch = 256
     x0 = np.array([0.0, np.pi, 0.0, 0.0])
-    u0 = np.array([0.0])
 
     simX, simU = main_sequential(x0=x0, N_sim=N_batch, tol=tol)
 

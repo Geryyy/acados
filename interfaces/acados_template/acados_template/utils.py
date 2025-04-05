@@ -29,6 +29,7 @@
 # POSSIBILITY OF SUCH DAMAGE.;
 #
 
+from typing import Union
 import json
 import os
 import shutil
@@ -42,24 +43,9 @@ else:
     from ctypes import CDLL as DllLoader
 import numpy as np
 from casadi import DM, MX, SX, CasadiMeta, Function
+import casadi as ca
+from contextlib import contextmanager
 
-ALLOWED_CASADI_VERSIONS = (
-    '3.4.0',
-    '3.4.5',
-    '3.5.1',
-    '3.5.2',
-    '3.5.3',
-    '3.5.4',
-    '3.5.6',
-    '3.5.5',
-    '3.6.0',
-    '3.6.1',
-    '3.6.2',
-    '3.6.3',
-    '3.6.4',
-    '3.6.5',
-    '3.6.6',
-)
 
 TERA_VERSION = "0.0.34"
 
@@ -70,6 +56,17 @@ PLATFORM2TERA = {
 }
 
 ACADOS_INFTY = 1e10
+
+@contextmanager
+def set_directory(path: str):
+    """Sets the cwd within the context"""
+    origin = os.getcwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(origin)
+
 
 def check_if_square(mat: np.ndarray, name: str):
     if mat.shape[0] != mat.shape[1]:
@@ -131,24 +128,27 @@ def get_shared_lib(shared_lib_name: str, winmode = None) -> DllLoader:
 
 def check_casadi_version():
     casadi_version = CasadiMeta.version()
-    if casadi_version in ALLOWED_CASADI_VERSIONS:
-        return
-    else:
-        msg =  'Warning: Please note that the following versions of CasADi are '
-        msg += 'officially supported: {}.\n '.format(" or ".join(ALLOWED_CASADI_VERSIONS))
-        msg += 'If there is an incompatibility with the CasADi generated code, '
-        msg += 'please consider changing your CasADi version.\n'
-        msg += 'Version {} currently in use.'.format(casadi_version)
-        print(msg)
+    major_minor = casadi_version.split('.')
+    major = int(major_minor[0])
+    minor = int(major_minor[1])
+    if major < 3 or (major == 3 and minor < 4): # < 3.4
+        raise Exception(f'CasADi version {casadi_version} is not supported. '
+                        'Please use a version >= 3.4.0.')
+
+    if major > 3 or (major == 3 and minor > 7): # >= 3.7
+        print(f"Warning: CasADi version {casadi_version} is not tested with acados yet.")
+    elif major == 3 and minor < 7:
+        print(f"Warning: Full featured acados requires CasADi version >= 3.7, got {casadi_version}.")
+
 
 def check_casadi_version_supports_p_global():
     try:
-        from casadi import extract_parametric, cse, blazing_spline
+        from casadi import extract_parametric, cse
     except:
         raise Exception("CasADi version does not support extract_parametric or cse functions.\nNeeds nightly-se2 release or later, see: https://github.com/casadi/casadi/releases/tag/nightly-se2")
 
 
-def get_simulink_default_opts():
+def get_simulink_default_opts() -> dict:
     python_interface_path = get_python_interface_path()
     abs_path = os.path.join(python_interface_path, 'simulink_default_opts.json')
     with open(abs_path , 'r') as f:
@@ -185,8 +185,10 @@ def is_empty(x):
         return True if np.prod(x.shape) == 0 else False
     elif x is None:
         return True
-    elif isinstance(x, (set, list)):
+    elif isinstance(x, (set, list, str)):
         return True if len(x) == 0 else False
+    elif isinstance(x, (float, int)):
+        return False
     else:
         raise Exception("is_empty expects one of the following types: casadi.MX, casadi.SX, "
                         + "None, numpy array empty list, set. Got: " + str(type(x)))
@@ -283,25 +285,23 @@ def render_template(in_file, out_file, output_dir, json_path, template_glob=None
     if template_glob is None:
         head, in_file = os.path.split(in_file)
         template_glob = os.path.join(acados_path, 'c_templates_tera', head, '**', '*')
-    cwd = os.getcwd()
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    os.chdir(output_dir)
 
-    tera_path = get_tera()
+    with set_directory(output_dir):
+        tera_path = get_tera()
 
-    # call tera as system cmd
-    os_cmd = f"{tera_path} '{template_glob}' '{in_file}' '{json_path}' '{out_file}'"
-    # Windows cmd.exe can not cope with '...', so use "..." instead:
-    if os.name == 'nt':
-        os_cmd = os_cmd.replace('\'', '\"')
+        # call tera as system cmd
+        os_cmd = f"{tera_path} '{template_glob}' '{in_file}' '{json_path}' '{out_file}'"
+        # Windows cmd.exe can not cope with '...', so use "..." instead:
+        if os.name == 'nt':
+            os_cmd = os_cmd.replace('\'', '\"')
 
-    status = os.system(os_cmd)
-    if status != 0:
-        raise Exception(f'Rendering of {in_file} failed!\n\nAttempted to execute OS command:\n{os_cmd}\n\n')
+        status = os.system(os_cmd)
+        if status != 0:
+            raise Exception(f'Rendering of {in_file} failed!\n\nAttempted to execute OS command:\n{os_cmd}\n\n')
 
-    os.chdir(cwd)
 
 
 def casadi_expr_to_string(expr) -> str:
@@ -393,6 +393,15 @@ def check_if_nparray_and_flatten(val, name) -> np.ndarray:
         raise Exception(f"{name} must be a numpy array, got {type(val)}")
     return val.reshape(-1)
 
+def check_if_nparray_or_casadi_symbolic_and_flatten(val, name) -> np.ndarray:
+    if not isinstance(val, (np.ndarray, SX, MX)):
+        raise Exception(f"{name} must be array of type np.ndarray, casadi.SX, or casadi.MX, got {type(val)}")
+
+    if isinstance(val, (SX, MX)):
+        return ca.reshape(val, val.numel(), 1)
+    else:
+        return val.reshape(-1)
+
 
 def check_if_2d_nparray(val, name) -> None:
     if not isinstance(val, np.ndarray):
@@ -400,6 +409,16 @@ def check_if_2d_nparray(val, name) -> None:
     if val.ndim != 2:
         raise Exception(f"{name} must be a 2D numpy array, got shape {val.shape}")
     return
+
+
+def check_if_2d_nparray_or_casadi_symbolic(val, name) -> None:
+    if isinstance(val, (SX, MX, DM)):
+        return
+    if not isinstance(val, np.ndarray):
+        raise Exception(f"{name} must be a array of type np.ndarray, casadi.SX, or casadi.MX, got {type(val)}")
+    if val.ndim != 2:
+        raise Exception(f"{name} must be a 2D array of type np.ndarray, casadi.SX, or casadi.MX, got shape {val.shape}")
+
 
 def print_J_to_idx_note():
     print("NOTE: J* matrix is converted to zero based vector idx* vector, which is returned here.")
@@ -505,7 +524,7 @@ def idx_perm_to_ipiv(idx_perm):
     return ipiv
 
 
-def print_casadi_expression(f):
+def print_casadi_expression(f: Union[MX, SX, DM]):
     for ii in range(casadi_length(f)):
         print(f[ii,:])
 

@@ -38,15 +38,16 @@ import numpy as np
 import casadi as ca
 from casadi import SX, norm_2, vertcat
 from casadi.tools import struct_symSX, entry
-from casadi.tools.structure3 import DMStruct
+from casadi.tools.structure3 import DMStruct, ssymStruct
 import matplotlib.pyplot as plt
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 from utils import get_chain_params
 from typing import Tuple
 from plot_utils import plot_timings
+import time
 
 
-def export_discrete_erk4_integrator_step(f_expl: SX, x: SX, u: SX, p: struct_symSX, h: float, n_stages: int = 2) -> ca.SX:
+def export_discrete_erk4_integrator_step(f_expl: SX, x: SX, u: SX, p: ssymStruct, h: float, n_stages: int = 2) -> ca.SX:
     """Define ERK4 integrator for continuous dynamics."""
     dt = h / n_stages
     ode = ca.Function("f", [x, u, p], [f_expl])
@@ -61,7 +62,7 @@ def export_discrete_erk4_integrator_step(f_expl: SX, x: SX, u: SX, p: struct_sym
     return xnext
 
 
-def define_param_struct_symSX(n_mass: int, disturbance: bool = True) -> DMStruct:
+def define_param_ssymStruct(n_mass: int, disturbance: bool = True) -> ssymStruct:
     """Define parameter struct."""
     n_link = n_mass - 1
 
@@ -100,7 +101,7 @@ def export_chain_mass_model(n_mass: int, Ts: float = 0.2, disturbance: bool = Fa
     """Export chain mass model for acados."""
     x0 = np.array([0, 0, 0])  # fix mass (at wall)
 
-    M = n_mass - 2  # number of intermediate massesu
+    M = n_mass - 2  # number of intermediate masses
 
     nx, nu = define_nx_nu(n_mass)
 
@@ -110,7 +111,7 @@ def export_chain_mass_model(n_mass: int, Ts: float = 0.2, disturbance: bool = Fa
     xdot = SX.sym("xdot", nx, 1)
 
     f = SX.zeros(3 * M, 1)  # force on intermediate masses
-    p = define_param_struct_symSX(n_mass=n_mass, disturbance=disturbance)
+    p = define_param_ssymStruct(n_mass=n_mass, disturbance=disturbance)
 
     # Gravity force
     for i in range(M):
@@ -179,7 +180,7 @@ def export_chain_mass_model(n_mass: int, Ts: float = 0.2, disturbance: bool = Fa
     model.x = x
     model.xdot = xdot
     model.u = u
-    model.p = p.cat
+    model.p_global = p.cat
     model.name = model_name
 
     p_map = p(0)
@@ -191,7 +192,6 @@ def compute_parametric_steady_state(
     model: AcadosModel, p: DMStruct, xPosFirstMass: np.ndarray, xEndRef: np.ndarray
 ) -> np.ndarray:
     """Compute steady state for chain mass model."""
-    # TODO reuse/adapt the compute_steady_state function in utils.py
 
     p_ = p(0)
     p_["m"] = p["m"]
@@ -222,7 +222,7 @@ def compute_parametric_steady_state(
     g += [model.u]  # don't actuate controlled mass
 
     # misuse IPOPT as nonlinear equation solver
-    nlp = {"x": ca.vertcat(*w), "f": 0, "g": ca.vertcat(*g), "p": model.p}
+    nlp = {"x": ca.vertcat(*w), "f": 0, "g": ca.vertcat(*g), "p": model.p_global}
 
     solver = ca.nlpsol("solver", "ipopt", nlp)
     sol = solver(x0=w0, lbg=0, ubg=0, p=p_.cat)
@@ -300,14 +300,14 @@ def export_parametric_ocp(
     x_e = ocp.model.x - x_ss
     u_e = ocp.model.u - np.zeros((nu, 1))
 
-    idx = find_idx_for_labels(define_param_struct_symSX(chain_params_["n_mass"], disturbance=True).cat, "Q")
-    Q_sym = ca.reshape(ocp.model.p[idx], (nx, nx))
+    idx = find_idx_for_labels(define_param_ssymStruct(chain_params_["n_mass"], disturbance=True).cat, "Q")
+    Q_sym = ca.reshape(ocp.model.p_global[idx], (nx, nx))
     q_diag = np.ones((nx, 1))
     q_diag[3 * M : 3 * M + 3] = M + 1
     p["Q"] = 2 * np.diagflat(q_diag)
 
-    idx = find_idx_for_labels(define_param_struct_symSX(chain_params_["n_mass"], disturbance=True).cat, "R")
-    R_sym = ca.reshape(ocp.model.p[idx], (nu, nu))
+    idx = find_idx_for_labels(define_param_ssymStruct(chain_params_["n_mass"], disturbance=True).cat, "R")
+    R_sym = ca.reshape(ocp.model.p_global[idx], (nu, nu))
     p["R"] = 2 * np.diagflat(1e-2 * np.ones((nu, 1)))
 
     ocp.model.cost_expr_ext_cost = 0.5 * (x_e.T @ Q_sym @ x_e + u_e.T @ R_sym @ u_e)
@@ -315,7 +315,7 @@ def export_parametric_ocp(
 
     ocp.model.cost_y_expr = vertcat(x_e, u_e)
 
-    ocp.parameter_values = p.cat.full().flatten()
+    ocp.p_global_values = p.cat.full().flatten()
 
     # set constraints
     umax = 1 * np.ones((nu,))
@@ -335,10 +335,6 @@ def export_parametric_ocp(
     ocp.solver_options.nlp_solver_max_iter = nlp_iter
 
     if hessian_approx == "EXACT":
-        ocp.solver_options.nlp_solver_step_length = 0.0
-        ocp.solver_options.nlp_solver_max_iter = 1
-        ocp.solver_options.qp_solver_iter_max = 200
-        ocp.solver_options.tol = 1e-10
         ocp.solver_options.qp_solver_ric_alg = qp_solver_ric_alg
         ocp.solver_options.qp_solver_cond_N = ocp.solver_options.N_horizon
         ocp.solver_options.with_solution_sens_wrt_params = True
@@ -357,7 +353,7 @@ def main_parametric(qp_solver_ric_alg: int = 0, chain_params_: dict = get_chain_
     ocp, parameter_values = export_parametric_ocp(
         chain_params_=chain_params_, qp_solver_ric_alg=qp_solver_ric_alg, integrator_type="DISCRETE",
     )
-
+    with_more_adjoints = True
     ocp_json_file = "acados_ocp_" + ocp.model.name + ".json"
 
     # Check if json_file exists
@@ -388,13 +384,16 @@ def main_parametric(qp_solver_ric_alg: int = 0, chain_params_: dict = get_chain_
     x0 = np.zeros((ocp.dims.nx, 1))
     x0[: 3 * (M + 1) : 3] = pos0_x[1:].reshape((M + 1, 1))
 
-    np_test = 100
+    nx = ocp.dims.nx
+    nu = ocp.dims.nu
+
+    np_test = 20
 
     # p_label = "L_2_0"
     # p_label = "D_2_0"
     p_label = f"C_{M}_0"
 
-    p_idx = find_idx_for_labels(define_param_struct_symSX(chain_params_["n_mass"], disturbance=True).cat, p_label)[0]
+    p_idx = find_idx_for_labels(define_param_ssymStruct(chain_params_["n_mass"], disturbance=True).cat, p_label)[0]
 
     p_var = np.linspace(0.5 * parameter_values.cat[p_idx], 1.5 * parameter_values.cat[p_idx], np_test).flatten()
 
@@ -407,40 +406,131 @@ def main_parametric(qp_solver_ric_alg: int = 0, chain_params_: dict = get_chain_
     timings_lin_and_factorize = np.zeros((np_test))
     timings_lin_params = np.zeros((np_test))
     timings_solve_params = np.zeros((np_test))
+    timings_store_load = np.zeros((np_test))
+    timings_lin_exact_hessian_qp = np.zeros((np_test))
+    timings_solve_params_adj = np.zeros((np_test))
+    timings_parameter_update = np.zeros((np_test))
+    if with_more_adjoints:
+        timings_solve_params_adj_all_primals = np.zeros((np_test))
+        timings_solve_params_adj_uforw = np.zeros((np_test))
+
+        # seed for forward sensitivities of u_0
+        seed_u_u0 = [(0, np.eye(nu))]
+        seed_x_u0 = [(0, np.zeros((nx, nu)))]
+
+        # seed for forward sensitivities of all primals
+        N_horizon = ocp.solver_options.N_horizon
+        n_primal = nx * (N_horizon + 1) + nu * N_horizon
+        n_adj = n_primal
+        stages_x = range(0, N_horizon+1)
+        stages_u = range(0, N_horizon)
+        seed_xstage = [np.zeros((nx, n_adj)) for i in stages_x]
+        seed_ustage = [np.zeros((nu, n_adj)) for i in stages_u]
+        for ii in range(N_horizon+1):
+            for j in range(nx):
+                seed_xstage[ii][j, j] = 1
+        offset = nx * (N_horizon + 1)
+        for ii in range(N_horizon):
+            for j in range(nu):
+                seed_ustage[ii][j, j+offset] = 1
+        zip_stages_x = list(zip(stages_x, seed_xstage))
+        zip_stages_u = list(zip(stages_u, seed_ustage))
+
+    seed_x = np.ones((nx, 1))
+    seed_u = np.ones((nu, 1))
 
     for i in range(np_test):
+
+        # Update parameters
         parameter_values.cat[p_idx] = p_var[i]
 
         p_val = parameter_values.cat.full().flatten()
-        for stage in range(ocp.solver_options.N_horizon + 1):
-            ocp_solver.set(stage, "p", p_val)
-            sensitivity_solver.set(stage, "p", p_val)
+        t_start = time.time()
+        ocp_solver.set_p_global_and_precompute_dependencies(p_val)
+        sensitivity_solver.set_p_global_and_precompute_dependencies(p_val)
+        timings_parameter_update[i] = time.time() - t_start
 
+        # Solve OCP
         u_opt.append(ocp_solver.solve_for_x0(x0))
         print(f"ocp_solver status {ocp_solver.status}")
-
         timings_solve_ocp_solver[i] = ocp_solver.get_stats("time_tot")
 
-        ocp_solver.store_iterate(filename="iterate.json", overwrite=True, verbose=False)
-        sensitivity_solver.load_iterate(filename="iterate.json", verbose=False)
-        sensitivity_solver.solve_for_x0(x0, fail_on_nonzero_status=False, print_stats_on_failure=False)
+        # Store/Load
+        t_start = time.time()
 
-        timings_lin_and_factorize[i] = sensitivity_solver.get_stats("time_tot")
+        # using AcadosOcpFlatIterate
+        iterate = ocp_solver.store_iterate_to_flat_obj()
+        sensitivity_solver.load_iterate_from_flat_obj(iterate)
+
+        timings_store_load[i] = time.time() - t_start
+
+        # Call sensitivity solver -- factorize exact Hessian QP
+        sensitivity_solver.setup_qp_matrices_and_factorize()
+        timings_lin_exact_hessian_qp[i] = sensitivity_solver.get_stats("time_lin")
+        timings_lin_and_factorize[i] = sensitivity_solver.get_stats("time_tot") - timings_lin_exact_hessian_qp[i]
         print(f"sensitivity_solver status {sensitivity_solver.status}")
 
         # Calculate the policy gradient
-        _, sens_u_ = sensitivity_solver.eval_solution_sensitivity(0, "params_global")
+        out_dict = sensitivity_solver.eval_solution_sensitivity(0, "p_global")
+        sens_x_ = out_dict['sens_x']
+        sens_u_ = out_dict['sens_u']
         timings_lin_params[i] = sensitivity_solver.get_stats("time_solution_sens_lin")
         timings_solve_params[i] = sensitivity_solver.get_stats("time_solution_sens_solve")
 
+        # Calculate adjoint sensitivities
+        sens_adj = sensitivity_solver.eval_adjoint_solution_sensitivity(seed_x=[(0, seed_x)], seed_u=[(0, seed_u)])
+        timings_solve_params_adj[i] = sensitivity_solver.get_stats("time_solution_sens_solve")
+
+        sens_adj_ref = seed_u.T @ sens_u_ + seed_x.T @ sens_x_
+
+        assert np.allclose(sens_adj_ref.ravel(), sens_adj)
+        # print(np.abs(sens_adj_ref.ravel() -  sens_adj))
+
         sens_u.append(sens_u_[:, p_idx])
 
-    timing_results = {
-        "NLP solve": timings_solve_ocp_solver,
-        "prepare \& factorize exact Hessian QP": timings_lin_and_factorize,
-        "eval rhs": timings_lin_params,
-        "solve": timings_solve_params,
+        if with_more_adjoints:
+            # Calculate forward sensitivities of primals via adjoint sensitivities
+            sens_adj = sensitivity_solver.eval_adjoint_solution_sensitivity(seed_x=zip_stages_x, seed_u=zip_stages_u)
+            timings_solve_params_adj_all_primals[i] = sensitivity_solver.get_stats("time_solution_sens_solve")
+
+            # solution sensitivities of all u_0 entries
+            sens_adj = sensitivity_solver.eval_adjoint_solution_sensitivity(seed_u=seed_u_u0, seed_x=seed_x_u0)
+            timings_solve_params_adj_uforw[i] = sensitivity_solver.get_stats("time_solution_sens_solve")
+
+            print(f"i {i} {timings_solve_params_adj[i]*1e3:.5f} \t {timings_solve_params[i]*1e3:.5f} \t {timings_solve_params_adj_uforw[i]*1e3:.5f} \t {timings_solve_params_adj_all_primals[i]*1e3:.5f}")
+
+            # check wrt forward
+            assert np.allclose(sens_adj, out_dict['sens_u'])
+
+    timings_common = {
+        "NLP solve (S1)": timings_solve_ocp_solver * 1e3,
+        "store \& load iterates": timings_store_load * 1e3,
+        "parameter update": timings_parameter_update * 1e3,
+        "setup exact Lagrange Hessian (S2)": timings_lin_exact_hessian_qp * 1e3,
+        "factorize exact Lagrange Hessian (S3)": timings_lin_and_factorize * 1e3,
+        r"evaluate $J_\star$ (S4)": timings_lin_params * 1e3,
     }
+    timing_results_forward = timings_common.copy()
+    timing_results_adjoint = timings_common.copy()
+    timing_results_adj_uforw = timings_common.copy()
+    timing_results_adj_all_primals = timings_common.copy()
+
+    backsolve_label = "sensitivity solve given factorization (S5)"
+    timing_results_forward[backsolve_label] = timings_solve_params * 1e3
+    timing_results_adjoint[backsolve_label] = timings_solve_params_adj * 1e3
+
+    timings_list = [timing_results_forward, timing_results_adjoint]
+    labels = [r'$\frac{\partial w^\star}{\partial \theta}$ via forward', r'$\nu^\top \frac{\partial w^\star}{\partial \theta}$ via adjoint']
+
+    if with_more_adjoints:
+        timing_results_adj_uforw[backsolve_label] = timings_solve_params_adj_uforw * 1e3
+        timing_results_adj_all_primals[backsolve_label] = timings_solve_params_adj_all_primals * 1e3
+        timings_list += [timing_results_adj_uforw, timing_results_adj_all_primals]
+        labels += [r'$\frac{\partial u_0^\star}{\partial \theta}$ via adjoints', r'$\frac{\partial z^\star}{\partial \theta} $ via adjoints']
+
+
+    print_timings(timing_results_forward, metric="median")
+    print_timings(timing_results_forward, metric="min")
 
     u_opt = np.vstack(u_opt)
     sens_u = np.vstack(sens_u)
@@ -453,7 +543,8 @@ def main_parametric(qp_solver_ric_alg: int = 0, chain_params_: dict = get_chain_
     u_opt_reconstructed_acados = np.cumsum(sens_u, axis=0) * delta_p + u_opt[0, :]
     u_opt_reconstructed_acados += u_opt[0, :] - u_opt_reconstructed_acados[0, :]
 
-    plt.figure(figsize=(7, 10))
+    # TODO move to plot utils
+    plt.figure(figsize=(7, 7))
     for col in range(3):
         plt.subplot(4, 1, col + 1)
         plt.plot(p_var, u_opt[:, col], label=f"$u^*_{col}$")
@@ -476,11 +567,27 @@ def main_parametric(qp_solver_ric_alg: int = 0, chain_params_: dict = get_chain_
     plt.yscale("log")
     plt.xlabel(p_label)
     plt.xlim(p_var[0], p_var[-1])
+    plt.tight_layout()
+    plt.savefig("chain_adj_fwd_sens.pdf")
 
-    plot_timings([timing_results], timing_results.keys(), ["acados"], figure_filename=None)
+    plot_timings(timings_list, labels, figure_filename="timing_adj_fwd_sens_chain.png", t_max=10, horizontal=True, figsize=(12, 3), with_patterns=True)
 
     plt.show()
 
+
+def print_timings(timing_results: dict, metric: str = "median"):
+    if metric == "median":
+        timing_func = np.median
+    elif metric == "mean":
+        timing_func = np.mean
+    elif metric == "min":
+        timing_func = np.min
+    else:
+        raise ValueError(f"Unknown metric {metric}")
+
+    print(f"\n{metric} timings [ms]")
+    for key, value in timing_results.items():
+        print(f"{key}: {timing_func(value):.3f} ms")
 
 if __name__ == "__main__":
     chain_params = get_chain_params()

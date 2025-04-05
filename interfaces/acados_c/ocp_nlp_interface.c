@@ -48,6 +48,7 @@
 #include "acados/ocp_nlp/ocp_nlp_constraints_bgh.h"
 #include "acados/ocp_nlp/ocp_nlp_constraints_bgp.h"
 #include "acados/ocp_nlp/ocp_nlp_reg_convexify.h"
+#include "acados/ocp_nlp/ocp_nlp_reg_glm.h"
 #include "acados/ocp_nlp/ocp_nlp_reg_mirror.h"
 #include "acados/ocp_nlp/ocp_nlp_reg_project.h"
 #include "acados/ocp_nlp/ocp_nlp_reg_project_reduc_hess.h"
@@ -56,9 +57,11 @@
 #include "acados/ocp_nlp/ocp_nlp_globalization_merit_backtracking.h"
 #include "acados/ocp_nlp/ocp_nlp_globalization_funnel.h"
 #include "acados/ocp_nlp/ocp_nlp_sqp.h"
+#include "acados/ocp_nlp/ocp_nlp_sqp_with_feasible_qp.h"
 #include "acados/ocp_nlp/ocp_nlp_sqp_rti.h"
 #include "acados/ocp_nlp/ocp_nlp_ddp.h"
 #include "acados/utils/mem.h"
+#include "acados/utils/strsep.h"
 
 
 /************************************************
@@ -192,6 +195,9 @@ ocp_nlp_config *ocp_nlp_config_create(ocp_nlp_plan_t plan)
         case SQP:
             ocp_nlp_sqp_config_initialize_default(config);
             break;
+        case SQP_WITH_FEASIBLE_QP:
+            ocp_nlp_sqp_wfqp_config_initialize_default(config);
+            break;
         case SQP_RTI:
             ocp_nlp_sqp_rti_config_initialize_default(config);
             break;
@@ -210,6 +216,10 @@ ocp_nlp_config *ocp_nlp_config_create(ocp_nlp_plan_t plan)
     ocp_qp_xcond_solver_config_initialize_from_plan(plan.ocp_qp_solver_plan.qp_solver,
                                                     config->qp_solver);
 
+    // relaxed QP solver
+    ocp_qp_xcond_solver_config_initialize_from_plan(plan.ocp_qp_solver_plan.qp_solver,
+                                                    config->relaxed_qp_solver);
+
     // regularization
     switch (plan.regularization)
     {
@@ -227,6 +237,9 @@ ocp_nlp_config *ocp_nlp_config_create(ocp_nlp_plan_t plan)
             break;
         case CONVEXIFY:
             ocp_nlp_reg_convexify_config_initialize_default(config->regularize);
+            break;
+        case GERSHGORIN_LEVENBERG_MARQUARDT:
+            ocp_nlp_reg_glm_config_initialize_default(config->regularize);
             break;
         default:
             printf("\nerror: ocp_nlp_config_create: unsupported plan->regularization\n");
@@ -500,12 +513,15 @@ int ocp_nlp_cost_model_set(ocp_nlp_config *config, ocp_nlp_dims *dims,
         ocp_nlp_in *in, int stage, const char *field, void *value)
 {
     ocp_nlp_cost_config *cost_config = config->cost[stage];
-
     return cost_config->model_set(cost_config, dims->cost[stage], in->cost[stage], field, value);
-
 }
 
-
+int ocp_nlp_cost_model_get(ocp_nlp_config *config, ocp_nlp_dims *dims,
+        ocp_nlp_in *in, int stage, const char *field, void *value)
+{
+    ocp_nlp_cost_config *cost_config = config->cost[stage];
+    return cost_config->model_get(cost_config, dims->cost[stage], in->cost[stage], field, value);
+}
 
 int ocp_nlp_constraints_model_set(ocp_nlp_config *config, ocp_nlp_dims *dims,
         ocp_nlp_in *in, int stage, const char *field, void *value)
@@ -525,6 +541,9 @@ int ocp_nlp_dynamics_model_set_external_param_fun(ocp_nlp_config *config, ocp_nl
 
     ext_fun->set_param_pointer(ext_fun, in->parameter_values[stage]);
 
+    if (dims->n_global_data > 0)
+        ext_fun->set_global_data_pointer(ext_fun, in->global_data);
+
     dynamics_config->model_set(dynamics_config, dims->dynamics[stage], in->dynamics[stage], field, ext_fun);
 
     return ACADOS_SUCCESS;
@@ -540,6 +559,9 @@ int ocp_nlp_cost_model_set_external_param_fun(ocp_nlp_config *config, ocp_nlp_di
 
     ext_fun->set_param_pointer(ext_fun, in->parameter_values[stage]);
 
+    if (dims->n_global_data > 0)
+        ext_fun->set_global_data_pointer(ext_fun, in->global_data);
+
     return cost_config->model_set(cost_config, dims->cost[stage], in->cost[stage], field, ext_fun);
 
 }
@@ -553,6 +575,9 @@ int ocp_nlp_constraints_model_set_external_param_fun(ocp_nlp_config *config, ocp
     external_function_external_param_generic * ext_fun = (external_function_external_param_generic *) ext_fun_;
 
     ext_fun->set_param_pointer(ext_fun, in->parameter_values[stage]);
+
+    if (dims->n_global_data > 0)
+        ext_fun->set_global_data_pointer(ext_fun, in->global_data);
 
     return constr_config->model_set(constr_config, dims->constraints[stage],
             in->constraints[stage], field, ext_fun);
@@ -603,41 +628,35 @@ void ocp_nlp_out_destroy(void *out_)
 void ocp_nlp_out_set(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *out,
         int stage, const char *field, void *value)
 {
+    double *double_values = value;
     if (!strcmp(field, "x"))
     {
-        double *double_values = value;
         blasfeo_pack_dvec(dims->nx[stage], double_values, 1, &out->ux[stage], dims->nu[stage]);
     }
     else if (!strcmp(field, "u"))
     {
-        double *double_values = value;
         blasfeo_pack_dvec(dims->nu[stage], double_values, 1, &out->ux[stage], 0);
     }
     else if (!strcmp(field, "sl"))
     {
-        double *double_values = value;
         blasfeo_pack_dvec(dims->ns[stage], double_values, 1, &out->ux[stage],
                             dims->nu[stage] + dims->nx[stage]);
     }
     else if (!strcmp(field, "su"))
     {
-        double *double_values = value;
         blasfeo_pack_dvec(dims->ns[stage], double_values, 1, &out->ux[stage],
                             dims->nu[stage] + dims->nx[stage] + dims->ns[stage]);
     }
     else if (!strcmp(field, "pi"))
     {
-        double *double_values = value;
         blasfeo_pack_dvec(dims->nx[stage+1], double_values, 1, &out->pi[stage], 0);
     }
     else if (!strcmp(field, "lam"))
     {
-        double *double_values = value;
         blasfeo_pack_dvec(2*dims->ni[stage], double_values, 1, &out->lam[stage], 0);
     }
     else if (!strcmp(field, "z"))
     {
-        double *double_values = value;
         blasfeo_pack_dvec(dims->nz[stage], double_values, 1, &out->z[stage], 0);
     }
     else
@@ -647,6 +666,18 @@ void ocp_nlp_out_set(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *ou
     }
 }
 
+
+void ocp_nlp_out_set_values_to_zero(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *out)
+{
+    int N = dims->N;
+    for (int i = 0; i<=N; i++)
+    {
+        blasfeo_dvecse(dims->nv[i], 0.0, &out->ux[i], 0);
+        blasfeo_dvecse(dims->nz[i], 0.0, &out->z[i], 0);
+        blasfeo_dvecse(dims->nx[i+1], 0.0, &out->pi[i], 0);
+        blasfeo_dvecse(2*dims->ni[i], 0.0, &out->lam[i], 0);
+    }
+}
 
 
 void ocp_nlp_out_get(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *out,
@@ -702,6 +733,109 @@ void ocp_nlp_out_get(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *ou
 }
 
 
+int ocp_nlp_dims_get_total_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *out, const char *field)
+{
+    int N = dims->N;
+
+    int size = 0;
+    int stage;
+    if (!strcmp(field, "x"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += dims->nx[stage];
+        }
+    }
+    else if (!strcmp(field, "u"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            size += dims->nu[stage];
+        }
+    }
+    else if (!strcmp(field, "sl") || !strcmp(field, "su") ||
+             !strcmp(field, "zl") || !strcmp(field, "zu") ||
+             !strcmp(field, "Zl") || !strcmp(field, "Zu") ||
+             !strcmp(field, "cost_z") || !strcmp(field, "cost_Z"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += dims->ns[stage];
+        }
+    }
+    else if (!strcmp(field, "s"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += 2*dims->ns[stage];
+        }
+    }
+    else if (!strcmp(field, "z"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += dims->nz[stage];
+        }
+    }
+    else if (!strcmp(field, "pi"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            size += dims->nx[stage+1];
+        }
+    }
+    else if (!strcmp(field, "lam"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += 2*dims->ni[stage];
+        }
+    }
+    else if (!strcmp(field, "p"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += dims->np[stage];
+        }
+    }
+    else if (!strcmp(field, "lbx") || !strcmp(field, "ubx") || !strcmp(field, "nbx"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += ocp_nlp_dims_get_from_attr(config, dims, out, stage, "lbx");
+        }
+    }
+    else if (!strcmp(field, "lbu") || !strcmp(field, "ubu") || !strcmp(field, "nbu"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            size += ocp_nlp_dims_get_from_attr(config, dims, out, stage, "lbu");
+        }
+    }
+    else if (!strcmp(field, "lg") || !strcmp(field, "ug") || !strcmp(field, "ng"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += ocp_nlp_dims_get_from_attr(config, dims, out, stage, "lg");
+        }
+    }
+    else if (!strcmp(field, "lh") || !strcmp(field, "uh") || !strcmp(field, "nh"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            size += ocp_nlp_dims_get_from_attr(config, dims, out, stage, "lh");
+        }
+    }
+    else
+    {
+        printf("\nerror: ocp_nlp_dims_get_total_from_attr: field %s not available\n", field);
+        exit(1);
+    }
+
+    return size;
+}
+
+
 
 int ocp_nlp_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *out,
         int stage, const char *field)
@@ -729,13 +863,22 @@ int ocp_nlp_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_n
     {
         return dims->np[stage];
     }
+    else if (!strcmp(field, "p_global") || !strcmp(field, "np_global"))
+    {
+        return dims->np_global;
+    }
     else if (!strcmp(field, "lam"))
     {
         return 2*dims->ni[stage];
     }
-    else if (!strcmp(field, "sl") || !strcmp(field, "su") || !strcmp(field, "s") ||
-             !strcmp(field, "zl") || !strcmp(field, "zu") || !strcmp(field, "cost_z") ||
-             !strcmp(field, "Zl") || !strcmp(field, "Zu") || !strcmp(field, "cost_Z"))
+    else if (!strcmp(field, "s"))
+    {
+        return 2*dims->ns[stage];
+    }
+    else if (!strcmp(field, "sl") || !strcmp(field, "su") ||
+             !strcmp(field, "zl") || !strcmp(field, "zu") ||
+             !strcmp(field, "Zl") || !strcmp(field, "Zu") ||
+             !strcmp(field, "cost_z") || !strcmp(field, "cost_Z"))
     {
         return dims->ns[stage];
     }
@@ -861,50 +1004,62 @@ void ocp_nlp_constraint_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims 
 }
 
 
+// TODO: ocp_nlp_out not needed?
 void ocp_nlp_qp_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_out *out,
         int stage, const char *field, int *dims_out)
 {
     // only matrices here matrices
     // dynamics
-    if (!strcmp(field, "A"))
+    if (!strcmp(field, "A") || !strcmp(field, "relaxed_A"))
     {
         dims_out[0] = dims->nx[stage+1];
         dims_out[1] = dims->nx[stage];
     }
-    else if (!strcmp(field, "B"))
+    else if (!strcmp(field, "B") || !strcmp(field, "relaxed_B"))
     {
         dims_out[0] = dims->nx[stage+1];
         dims_out[1] = dims->nu[stage];
     }
-    else if (!strcmp(field, "b"))
+    else if (!strcmp(field, "b") || !strcmp(field, "relaxed_b"))
     {
         dims_out[0] = 1;
         dims_out[1] = dims->nx[stage+1];
     }
-    else if (!strcmp(field, "Q") || !strcmp(field, "P"))
+    // cost
+    else if (!strcmp(field, "Q") || !strcmp(field, "relaxed_Q") || !strcmp(field, "P") || !strcmp(field, "relaxed_P"))
     {
         dims_out[0] = dims->nx[stage];
         dims_out[1] = dims->nx[stage];
     }
-    else if (!strcmp(field, "R") || !strcmp(field, "Lr"))
+    else if (!strcmp(field, "R") || !strcmp(field, "relaxed_R") || !strcmp(field, "Lr") || !strcmp(field, "relaxed_Lr"))
     {
         dims_out[0] = dims->nu[stage];
         dims_out[1] = dims->nu[stage];
     }
-    else if (!strcmp(field, "S") || !strcmp(field, "K"))
+    else if (!strcmp(field, "S") || !strcmp(field, "relaxed_S") || !strcmp(field, "K") || !strcmp(field, "relaxed_K"))
     {
         dims_out[0] = dims->nu[stage];
         dims_out[1] = dims->nx[stage];
     }
-    else if (!strcmp(field, "r"))
+    else if (!strcmp(field, "r") || !strcmp(field, "relaxed_r"))
     {
         dims_out[0] = 1;
         dims_out[1] = dims->nu[stage];
     }
-    else if (!strcmp(field, "q"))
+    else if (!strcmp(field, "q") || !strcmp(field, "relaxed_q"))
     {
         dims_out[0] = 1;
         dims_out[1] = dims->nx[stage];
+    }
+    else if (!strcmp(field, "zl") || !strcmp(field, "zu") || !strcmp(field, "Zl") || !strcmp(field, "Zu")  || !strcmp(field, "idxs"))
+    {
+        config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "ns", &dims_out[0]);
+        dims_out[1] = 1;
+    }
+    else if (!strcmp(field, "relaxed_zl") || !strcmp(field, "relaxed_zu") || !strcmp(field, "relaxed_Zl") || !strcmp(field, "relaxed_Zu")  || !strcmp(field, "relaxed_idxs"))
+    {
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "ns", &dims_out[0]);
+        dims_out[1] = 1;
     }
     else if (!strcmp(field, "p"))
     {
@@ -922,34 +1077,61 @@ void ocp_nlp_qp_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims, o
         config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "ng", &dims_out[0]);
         dims_out[1] = dims->nu[stage];
     }
-    else if (!strcmp(field, "lg"))
+    else if (!strcmp(field, "lg") || !strcmp(field, "ug"))
     {
         config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "ng", &dims_out[0]);
         dims_out[1] = 1;
     }
-    else if (!strcmp(field, "ug"))
-    {
-        config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "ng", &dims_out[0]);
-        dims_out[1] = 1;
-    }
-    else if (!strcmp(field, "lbx"))
+    else if (!strcmp(field, "lbx") || !strcmp(field, "ubx") || !strcmp(field, "idxbx"))
     {
         config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "nbx", &dims_out[0]);
         dims_out[1] = 1;
     }
-    else if (!strcmp(field, "ubx"))
-    {
-        config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "nbx", &dims_out[0]);
-        dims_out[1] = 1;
-    }
-    else if (!strcmp(field, "lbu"))
+    else if (!strcmp(field, "lbu") || !strcmp(field, "ubu") || !strcmp(field, "idxbu"))
     {
         config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "nbu", &dims_out[0]);
         dims_out[1] = 1;
     }
-    else if (!strcmp(field, "ubu"))
+    else if (!strcmp(field, "idxb"))
     {
+        int tmp_int;
         config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "nbu", &dims_out[0]);
+        config->qp_solver->dims_get(config->qp_solver, dims->qp_solver, stage, "nbx", &tmp_int);
+        dims_out[0] += tmp_int;
+        dims_out[1] = 1;
+    }
+    // constraints of relaxed qp
+    else if (!strcmp(field, "relaxed_C"))
+    {
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "ng", &dims_out[0]);
+        dims_out[1] = dims->nx[stage];
+    }
+    else if (!strcmp(field, "relaxed_D"))
+    {
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "ng", &dims_out[0]);
+        dims_out[1] = dims->nu[stage];
+    }
+    else if (!strcmp(field, "relaxed_lg") || !strcmp(field, "relaxed_ug"))
+    {
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "ng", &dims_out[0]);
+        dims_out[1] = 1;
+    }
+    else if (!strcmp(field, "relaxed_idxb"))
+    {
+        int tmp_int;
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "nbu", &dims_out[0]);
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "nbx", &tmp_int);
+        dims_out[0] += tmp_int;
+        dims_out[1] = 1;
+    }
+    else if (!strcmp(field, "relaxed_lbx") || !strcmp(field, "relaxed_ubx") || !strcmp(field, "relaxed_idxbx"))
+    {
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "nbx", &dims_out[0]);
+        dims_out[1] = 1;
+    }
+    else if (!strcmp(field, "relaxed_lbu") || !strcmp(field, "relaxed_ubu") || !strcmp(field, "relaxed_idxbu"))
+    {
+        config->relaxed_qp_solver->dims_get(config->relaxed_qp_solver, dims->relaxed_qp_solver, stage, "nbu", &dims_out[0]);
         dims_out[1] = 1;
     }
     else if (!strcmp(field, "pcond_R"))
@@ -985,19 +1167,8 @@ void ocp_nlp_cost_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims,
         config->cost[stage]->dims_get(config->cost[stage], dims->cost[stage],
                                             "ny", &dims_out[0]);
     }
-    else if (!strcmp(field, "Zl"))
-    {
-        dims_out[0] = dims->ns[stage];
-    }
-    else if (!strcmp(field, "Zu"))
-    {
-        dims_out[0] = dims->ns[stage];
-    }
-    else if (!strcmp(field, "zl"))
-    {
-        dims_out[0] = dims->ns[stage];
-    }
-    else if (!strcmp(field, "zu"))
+    else if (!strcmp(field, "Zl") || !strcmp(field, "Zu") ||
+             !strcmp(field, "zl") || !strcmp(field, "zu"))
     {
         dims_out[0] = dims->ns[stage];
     }
@@ -1032,6 +1203,16 @@ void ocp_nlp_cost_dims_get_from_attr(ocp_nlp_config *config, ocp_nlp_dims *dims,
     {
         dims_out[0] = dims->nx[stage] + dims->nu[stage];
         dims_out[1] = dims->nx[stage] + dims->nu[stage];
+    }
+    else if (!strcmp(field, "C"))
+    {
+        dims_out[0] = dims->ng[stage];
+        dims_out[1] = dims->nx[stage];
+    }
+    else if (!strcmp(field, "D"))
+    {
+        dims_out[0] = dims->ng[stage];
+        dims_out[1] = dims->nu[stage];
     }
     else if (!strcmp(field, "scaling"))
     {
@@ -1083,14 +1264,6 @@ void ocp_nlp_solver_opts_set_at_stage(ocp_nlp_config *config, void *opts_, int s
 }
 
 
-
-void ocp_nlp_solver_opts_update(ocp_nlp_config *config, ocp_nlp_dims *dims, void *opts_)
-{
-    config->opts_update(config, dims, opts_);
-}
-
-
-
 void ocp_nlp_solver_opts_destroy(void *opts)
 {
     free(opts);
@@ -1102,12 +1275,12 @@ void ocp_nlp_solver_opts_destroy(void *opts)
 * solver
 ************************************************/
 
-static acados_size_t ocp_nlp_calculate_size(ocp_nlp_config *config, ocp_nlp_dims *dims, void *opts_)
+static acados_size_t ocp_nlp_calculate_size(ocp_nlp_config *config, ocp_nlp_dims *dims, void *opts_, ocp_nlp_in *nlp_in)
 {
     acados_size_t bytes = sizeof(ocp_nlp_solver);
 
-    bytes += config->memory_calculate_size(config, dims, opts_);
-    bytes += config->workspace_calculate_size(config, dims, opts_);
+    bytes += config->memory_calculate_size(config, dims, opts_, nlp_in);
+    bytes += config->workspace_calculate_size(config, dims, opts_, nlp_in);
 
     return bytes;
 }
@@ -1115,7 +1288,7 @@ static acados_size_t ocp_nlp_calculate_size(ocp_nlp_config *config, ocp_nlp_dims
 
 
 static ocp_nlp_solver *ocp_nlp_assign(ocp_nlp_config *config, ocp_nlp_dims *dims,
-                                      void *opts_, void *raw_memory)
+                                      void *opts_, ocp_nlp_in *nlp_in, void *raw_memory)
 {
     char *c_ptr = (char *) raw_memory;
 
@@ -1126,30 +1299,30 @@ static ocp_nlp_solver *ocp_nlp_assign(ocp_nlp_config *config, ocp_nlp_dims *dims
     solver->dims = dims;
     solver->opts = opts_;
 
-    solver->mem = config->memory_assign(config, dims, opts_, c_ptr);
+    solver->mem = config->memory_assign(config, dims, opts_, nlp_in, c_ptr);
     // printf("\nsolver->mem %p", solver->mem);
-    c_ptr += config->memory_calculate_size(config, dims, opts_);
+    c_ptr += config->memory_calculate_size(config, dims, opts_, nlp_in);
 
     solver->work = (void *) c_ptr;
-    c_ptr += config->workspace_calculate_size(config, dims, opts_);
+    c_ptr += config->workspace_calculate_size(config, dims, opts_, nlp_in);
 
-    assert((char *) raw_memory + ocp_nlp_calculate_size(config, dims, opts_) == c_ptr);
+    assert((char *) raw_memory + ocp_nlp_calculate_size(config, dims, opts_, nlp_in) == c_ptr);
 
     return solver;
 }
 
 
 
-ocp_nlp_solver *ocp_nlp_solver_create(ocp_nlp_config *config, ocp_nlp_dims *dims, void *opts_)
+ocp_nlp_solver *ocp_nlp_solver_create(ocp_nlp_config *config, ocp_nlp_dims *dims, void *opts_, ocp_nlp_in *nlp_in)
 {
     config->opts_update(config, dims, opts_);
 
-    acados_size_t bytes = ocp_nlp_calculate_size(config, dims, opts_);
+    acados_size_t bytes = ocp_nlp_calculate_size(config, dims, opts_, nlp_in);
 
     void *ptr = acados_calloc(1, bytes);
     assert(ptr != 0);
 
-    ocp_nlp_solver *solver = ocp_nlp_assign(config, dims, opts_, ptr);
+    ocp_nlp_solver *solver = ocp_nlp_assign(config, dims, opts_, nlp_in, ptr);
 
     return solver;
 }
@@ -1175,6 +1348,12 @@ int ocp_nlp_solve(ocp_nlp_solver *solver, ocp_nlp_in *nlp_in, ocp_nlp_out *nlp_o
                                     solver->opts, solver->mem, solver->work);
 }
 
+
+int ocp_nlp_setup_qp_matrices_and_factorize(ocp_nlp_solver *solver, ocp_nlp_in *nlp_in, ocp_nlp_out *nlp_out)
+{
+    return solver->config->setup_qp_matrices_and_factorize(solver->config, solver->dims, nlp_in, nlp_out,
+                                    solver->opts, solver->mem, solver->work);
+}
 
 
 int ocp_nlp_precompute(ocp_nlp_solver *solver, ocp_nlp_in *nlp_in, ocp_nlp_out *nlp_out)
@@ -1202,10 +1381,7 @@ void ocp_nlp_eval_lagrange_grad_p(ocp_nlp_solver *solver, ocp_nlp_in *nlp_in, co
 void ocp_nlp_eval_residuals(ocp_nlp_solver *solver, ocp_nlp_in *nlp_in, ocp_nlp_out *nlp_out)
 {
     ocp_nlp_config *config = solver->config;
-    ocp_nlp_memory *nlp_mem;
-    config->get(config, solver->dims, solver->mem, "nlp_mem", &nlp_mem);
-
-    ocp_nlp_res_compute(solver->dims, nlp_in, nlp_out, nlp_mem->nlp_res, nlp_mem);
+    config->eval_kkt_residual(config, solver->dims, nlp_in, nlp_out, solver->opts, solver->mem, solver->work);
 }
 
 
@@ -1241,112 +1417,147 @@ void ocp_nlp_eval_params_jac(ocp_nlp_solver *solver, ocp_nlp_in *nlp_in, ocp_nlp
 }
 
 
+void ocp_nlp_eval_solution_sens_adj_p(ocp_nlp_solver *solver, ocp_nlp_in *nlp_in, ocp_nlp_out *sens_nlp_out, const char *field, int stage, double *out)
+{
+    solver->config->eval_solution_sens_adj_p(solver->config, solver->dims, solver->opts, solver->mem, solver->work, sens_nlp_out, field, stage, out);
+}
 
-void ocp_nlp_get(ocp_nlp_config *config, ocp_nlp_solver *solver,
-                 const char *field, void *return_value_)
+
+void ocp_nlp_get(ocp_nlp_solver *solver, const char *field, void *return_value_)
 {
     solver->config->get(solver->config, solver->dims, solver->mem, field, return_value_);
 }
 
 
 
-void ocp_nlp_get_at_stage(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_solver *solver,
-        int stage, const char *field, void *value)
+static void get_from_qp_in(ocp_qp_in *qp_in, int stage, const char *field, void *value)
 {
-    ocp_nlp_memory *nlp_mem;
-    config->get(config, dims, solver->mem, "nlp_mem", &nlp_mem);
-
     if (!strcmp(field, "A"))
     {
         double *double_values = value;
-        d_ocp_qp_get_A(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_A(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "B"))
     {
         double *double_values = value;
-        d_ocp_qp_get_B(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_B(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "b"))
     {
         double *double_values = value;
-        d_ocp_qp_get_b(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_b(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "Q"))
     {
         double *double_values = value;
-        d_ocp_qp_get_Q(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_Q(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "R"))
     {
         double *double_values = value;
-        d_ocp_qp_get_R(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_R(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "S"))
     {
         double *double_values = value;
-        d_ocp_qp_get_S(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_S(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "r"))
     {
         double *double_values = value;
-        d_ocp_qp_get_r(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_r(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "q"))
     {
         double *double_values = value;
-        d_ocp_qp_get_q(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_q(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "lbx"))
     {
         double *double_values = value;
-        d_ocp_qp_get_lbx(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_lbx(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "ubx"))
     {
         double *double_values = value;
-        d_ocp_qp_get_ubx(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_ubx(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "lbu"))
     {
         double *double_values = value;
-        d_ocp_qp_get_lbu(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_lbu(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "ubu"))
     {
         double *double_values = value;
-        d_ocp_qp_get_ubu(stage, nlp_mem->qp_in, double_values);
-    }
-    else if (!strcmp(field, "lb"))
-    {
-        double *double_values = value;
-        d_ocp_qp_get_lb(stage, nlp_mem->qp_in, double_values);
-    }
-    else if (!strcmp(field, "ub"))
-    {
-        double *double_values = value;
-        d_ocp_qp_get_ub(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_ubu(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "C"))
     {
         double *double_values = value;
-        d_ocp_qp_get_C(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_C(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "D"))
     {
         double *double_values = value;
-        d_ocp_qp_get_D(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_D(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "lg"))
     {
         double *double_values = value;
-        d_ocp_qp_get_lg(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_lg(stage, qp_in, double_values);
     }
     else if (!strcmp(field, "ug"))
     {
         double *double_values = value;
-        d_ocp_qp_get_ug(stage, nlp_mem->qp_in, double_values);
+        d_ocp_qp_get_ug(stage, qp_in, double_values);
     }
-    else if (!strcmp(field, "P") || !strcmp(field, "K") || !strcmp(field, "Lr") || !strcmp(field, "p"))
+    else if (!strcmp(field, "zl"))
+    {
+        double *double_values = value;
+        d_ocp_qp_get_zl(stage, qp_in, double_values);
+    }
+    else if (!strcmp(field, "zu"))
+    {
+        double *double_values = value;
+        d_ocp_qp_get_zu(stage, qp_in, double_values);
+    }
+    else if (!strcmp(field, "Zl"))
+    {
+        double *double_values = value;
+        d_ocp_qp_get_Zl(stage, qp_in, double_values);
+    }
+    else if (!strcmp(field, "Zu"))
+    {
+        double *double_values = value;
+        d_ocp_qp_get_Zu(stage, qp_in, double_values);
+    }
+    else if (!strcmp(field, "idxs"))
+    {
+        int *int_values = value;
+        d_ocp_qp_get_idxs(stage, qp_in, int_values);
+    }
+    else if (!strcmp(field, "idxb"))
+    {
+        int *int_values = value;
+        d_ocp_qp_get_idxb(stage, qp_in, int_values);
+    }
+    else
+    {
+        printf("\nerror: ocp_nlp_get_at_stage: field %s not available\n", field);
+        exit(1);
+    }
+}
+
+
+void ocp_nlp_get_at_stage(ocp_nlp_solver *solver, int stage, const char *field, void *value)
+{
+    ocp_nlp_dims *dims = solver->dims;
+    ocp_nlp_config *config = solver->config;
+    ocp_nlp_memory *nlp_mem;
+    config->get(config, dims, solver->mem, "nlp_mem", &nlp_mem);
+
+    if (!strcmp(field, "P") || !strcmp(field, "K") || !strcmp(field, "Lr") || !strcmp(field, "p"))
     {
         ocp_nlp_opts *nlp_opts;
         config->opts_get(config, dims, solver->opts, "nlp_opts", &nlp_opts);
@@ -1380,34 +1591,49 @@ void ocp_nlp_get_at_stage(ocp_nlp_config *config, ocp_nlp_dims *dims, ocp_nlp_so
     else if (!strcmp(field, "pcond_Q"))
     {
         ocp_qp_in *pcond_qp_in;
-        ocp_nlp_get(config, solver, "qp_xcond_in", &pcond_qp_in);
+        ocp_nlp_get(solver, "qp_xcond_in", &pcond_qp_in);
         d_ocp_qp_get_Q(stage, pcond_qp_in, value);
     }
     else if (!strcmp(field, "pcond_R"))
     {
         ocp_qp_in *pcond_qp_in;
-        ocp_nlp_get(config, solver, "qp_xcond_in", &pcond_qp_in);
+        ocp_nlp_get(solver, "qp_xcond_in", &pcond_qp_in);
         d_ocp_qp_get_R(stage, pcond_qp_in, value);
     }
     else if (!strcmp(field, "pcond_S"))
     {
         ocp_qp_in *pcond_qp_in;
-        ocp_nlp_get(config, solver, "qp_xcond_in", &pcond_qp_in);
+        ocp_nlp_get(solver, "qp_xcond_in", &pcond_qp_in);
         d_ocp_qp_get_S(stage, pcond_qp_in, value);
     }
     else
     {
-        printf("\nerror: ocp_nlp_get_at_stage: field %s not available\n", field);
-        exit(1);
+        char *ptr_module = NULL;
+        int module_length = 0;
+        char module[MAX_STR_LEN];
+        extract_module_name(field, module, &module_length, &ptr_module);
+        ocp_qp_in *qp_in;
+        const char *qp_field_name = field;
+        if ( ptr_module!=NULL && (!strcmp(ptr_module, "relaxed")) )
+        {
+            ocp_nlp_get(solver, "relaxed_qp_in", &qp_in);
+            qp_field_name = field+module_length+1;
+        }
+        else
+        {
+            qp_in = nlp_mem->qp_in;
+        }
+        get_from_qp_in(qp_in, stage, qp_field_name, value);
     }
 }
 
 
-void ocp_nlp_get_from_iterate(ocp_nlp_dims *dims, ocp_nlp_solver *solver,
-        int iter, int stage, const char *field, void *value)
+void ocp_nlp_get_from_iterate(ocp_nlp_solver *solver, int iter, int stage, const char *field, void *value)
 {
     ocp_nlp_config *config = solver->config;
     ocp_nlp_memory *nlp_mem;
+    ocp_nlp_dims *dims = solver->dims;
+
     config->get(config, solver->dims, solver->mem, "nlp_mem", &nlp_mem);
 
     ocp_nlp_opts *nlp_opts;
@@ -1421,10 +1647,216 @@ void ocp_nlp_get_from_iterate(ocp_nlp_dims *dims, ocp_nlp_solver *solver,
     ocp_nlp_out_get(config, dims, nlp_mem->iterates[iter], stage, field, value);
 }
 
-void ocp_nlp_set(ocp_nlp_config *config, ocp_nlp_solver *solver,
-        int stage, const char *field, void *value)
+
+void ocp_nlp_get_all(ocp_nlp_solver *solver, ocp_nlp_in *in, ocp_nlp_out *out, const char *field, void *value)
+{
+    ocp_nlp_dims *dims = solver->dims;
+
+    double *double_values = value;
+    int tmp_offset = 0;
+    int N = dims->N;
+    int tmp_int, stage;
+
+    if (!strcmp(field, "x"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = dims->nx[stage];
+            blasfeo_unpack_dvec(tmp_int, &out->ux[stage], dims->nu[stage], (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "u"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            tmp_int = dims->nu[stage];
+            blasfeo_unpack_dvec(tmp_int, &out->ux[stage], 0, (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "sl"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = dims->ns[stage];
+            blasfeo_unpack_dvec(tmp_int, &out->ux[stage], dims->nu[stage] + dims->nx[stage], (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "su"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = dims->ns[stage];
+            blasfeo_unpack_dvec(tmp_int, &out->ux[stage], dims->nu[stage] + dims->nx[stage] + dims->ns[stage],
+                                (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "s"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = 2*dims->ns[stage];
+            blasfeo_unpack_dvec(tmp_int, &out->ux[stage], dims->nu[stage] + dims->nx[stage],
+                                (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "z"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            tmp_int = dims->nz[stage];
+            blasfeo_unpack_dvec(tmp_int, &out->z[stage], 0, (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "pi"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            tmp_int = dims->nx[stage+1];
+            blasfeo_unpack_dvec(tmp_int, &out->pi[stage], 0, (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "lam"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = 2*dims->ni[stage];
+            blasfeo_unpack_dvec(tmp_int, &out->lam[stage], 0, (double_values + tmp_offset), 1);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "p"))
+    {
+        int ii;
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = dims->np[stage];
+            for (ii = 0; ii < dims->np[stage]; ii++)
+            {
+                double_values[tmp_offset + ii] = in->parameter_values[stage][ii];
+            }
+            tmp_offset += tmp_int;
+        }
+    }
+    else
+    {
+        printf("\nerror: ocp_nlp_get_all: field %s not available\n", field);
+        exit(1);
+    }
+}
+
+
+void ocp_nlp_set_all(ocp_nlp_solver *solver, ocp_nlp_in *in, ocp_nlp_out *out, const char *field, void *value)
+{
+    ocp_nlp_dims *dims = solver->dims;
+
+    double *double_values = value;
+    int tmp_offset = 0;
+    int N = dims->N;
+    int tmp_int, stage;
+
+    if (!strcmp(field, "x"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = dims->nx[stage];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->ux[stage], dims->nu[stage]);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "u"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            tmp_int = dims->nu[stage];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->ux[stage], 0);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "sl"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = dims->ns[stage];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->ux[stage], dims->nx[stage] + dims->nu[stage]);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "su"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = dims->ns[stage];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->ux[stage], dims->nx[stage] + dims->nu[stage] + dims->ns[stage]);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "s"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = 2*dims->ns[stage];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->ux[stage], dims->nx[stage] + dims->nu[stage]);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "z"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            tmp_int = dims->nz[stage];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->z[stage], 0);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "pi"))
+    {
+        for (stage = 0; stage < N; stage++)
+        {
+            tmp_int = dims->nx[stage+1];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->pi[stage], 0);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "lam"))
+    {
+        for (stage = 0; stage < N+1; stage++)
+        {
+            tmp_int = 2*dims->ni[stage];
+            blasfeo_pack_dvec(tmp_int, double_values + tmp_offset, 1, &out->lam[stage], 0);
+            tmp_offset += tmp_int;
+        }
+    }
+    else if (!strcmp(field, "p"))
+    {
+        int ii;
+        for (stage = 0; stage < N+1; stage++)
+        {
+            for (ii = 0; ii < dims->np[stage]; ii++)
+            {
+                in->parameter_values[stage][ii] = double_values[tmp_offset + ii];
+            }
+            tmp_offset += dims->np[stage];
+        }
+    }
+    else
+    {
+        printf("\nerror: ocp_nlp_set_all: field %s not available\n", field);
+        exit(1);
+    }
+}
+
+
+void ocp_nlp_set(ocp_nlp_solver *solver, int stage, const char *field, void *value)
 {
     ocp_nlp_memory *mem;
+    ocp_nlp_config *config = solver->config;
     config->get(config, solver->dims, solver->mem, "nlp_mem", &mem);
     // printf("called getter: nlp_mem %p\n", mem);
 
